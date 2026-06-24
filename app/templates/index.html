@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>계약 서류 자동 검증</title>
+  <!-- 1순위: static 폴더의 이미지 파일. 없으면 아래 인라인 SVG가 사용됨 -->
+  <link rel="icon" href="/static/favicon.png" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2302227a'/%3E%3Cpath%20d='M17%2033l10%2010%2020-22'%20fill='none'%20stroke='%23ffffff'%20stroke-width='7'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg:#eef2f7; --card:#ffffff; --accent:#02227a; --accent-ink:#ffffff;
+      --text:#1e293b; --muted:#64748b; --border:#e2e8f0; --input-bg:#f8fafc;
+      --match-bg:#C6EFCE; --mismatch-bg:#FFC7CE; --check-bg:#FFEB9C; --excluded-bg:#E2E8F0;
+      --cell-ink:#1e293b;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Segoe UI', system-ui, sans-serif; background:var(--bg); color:var(--text); padding:40px 16px 56px; }
+    .container { width:78%; max-width:1100px; margin:0 auto; }
+    h1 { font-size:24px; margin:0 0 10px; }
+    p.desc { color:var(--muted); margin:0 0 16px; font-size:13px; line-height:1.7; }
+    .legend { margin:0 0 24px; }
+    .legend span { display:inline-block; margin-right:14px; font-size:12px; color:var(--muted); }
+    .dot { display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:middle; margin-right:4px; border:1px solid rgba(0,0,0,.08); }
+
+    .panel { background:var(--card); border-radius:14px; padding:24px; margin-bottom:20px; border:1px solid var(--border); box-shadow:0 4px 16px rgba(15,23,42,.06); }
+
+    /* 업로드 폼: 입력 2개는 한 줄, 버튼은 아래 전체 너비 */
+    .controls { display:grid; grid-template-columns:1fr 1fr; gap:20px 20px; }
+    .field { display:flex; flex-direction:column; gap:8px; }
+    label { font-size:13px; font-weight:600; }
+    input[type=text], input[type=file] { width:100%; height:42px; border-radius:9px; border:1px solid var(--border); background:var(--input-bg); color:var(--text); font-size:13px; }
+    input[type=text] { padding:9px 11px; }
+    input[type=file] { padding:6px 10px; line-height:30px; }
+    input[type=text]:focus, input[type=file]:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(2,34,122,.18); }
+    input[type=file]::file-selector-button { height:30px; background:#e2e8f0; color:#334155; border:1px solid #cbd5e1; padding:0 14px; border-radius:7px; margin-right:10px; cursor:pointer; font-size:13px; }
+    input[type=file]:hover::file-selector-button { background:#cbd5e1; }
+    small { color:var(--muted); font-size:11px; }
+
+    button { border:none; border-radius:9px; padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; transition:opacity .15s, filter .15s; }
+    button:hover:not(:disabled) { filter:brightness(1.05); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .btn-primary { background:var(--accent); color:#fff; }
+    .btn-go { background:var(--accent); color:#fff; }
+    .btn-download { background:#fff; color:var(--accent); border:1.5px solid var(--accent); }
+    .btn-download:hover:not(:disabled) { background:#eef2ff; filter:none; }
+    .btn-block { grid-column:1 / -1; width:100%; height:48px; margin-top:6px; }
+
+    .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .progress-wrap { flex:1; min-width:200px; }
+    .progress-bar { height:10px; background:#eef2f7; border:1px solid var(--border); border-radius:999px; overflow:hidden; }
+    .progress-fill { height:100%; width:0%; background:linear-gradient(90deg,#02227a,#16a34a); transition:width .3s; }
+    .progress-text { font-size:12px; color:var(--muted); margin-top:6px; }
+
+    #status { font-size:13px; line-height:1.6; }
+    .err { color:#dc2626; } .ok { color:#16a34a; }
+    .spinner { display:inline-block; width:14px; height:14px; border:3px solid #cbd5e1; border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle; margin-right:6px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    .table-scroll { overflow:auto; max-height:62vh; border:1px solid var(--border); border-radius:12px; }
+    table.sheet { border-collapse:collapse; font-size:12px; white-space:nowrap; background:var(--card); }
+    table.sheet th.rownum, table.sheet td.rownum { position:sticky; left:0; z-index:2; background:#f1f5f9; color:var(--muted); text-align:center; min-width:42px; font-weight:600; }
+    table.sheet td, table.sheet th { border:1px solid var(--border); padding:6px 10px; max-width:280px; overflow:hidden; text-overflow:ellipsis; }
+    table.sheet tr.headerRow td { background:#eef2ff; font-weight:700; color:#1e293b; position:sticky; top:0; z-index:1; }
+    table.sheet td.target { box-shadow:inset 0 0 0 1px rgba(2,34,122,.35); }
+    table.sheet td.colhdr-target { background:var(--accent) !important; color:#fff !important; }
+    /* 판정 색상 (엑셀과 동일) */
+    td.st-pending { color:var(--accent) !important; font-style:italic; }
+    td.st-match    { background:var(--match-bg)    !important; color:var(--cell-ink) !important; }
+    td.st-mismatch { background:var(--mismatch-bg) !important; color:var(--cell-ink) !important; }
+    td.st-check    { background:var(--check-bg)    !important; color:var(--cell-ink) !important; }
+    td.st-excluded { background:var(--excluded-bg) !important; color:var(--cell-ink) !important; }
+    tr.row-active td.rownum { background:var(--accent); color:#fff; }
+    .hidden { display:none; }
+
+    @media (max-width:860px) {
+      .container { width:94%; }
+      .controls { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>계약 서류 자동 검증</h1>
+    <p class="desc">엑셀(.xlsx)과 서류 ZIP을 올리면 표가 그대로 화면에 표시됩니다. [검증 시작]을 누르면
+    각 행을 병렬로 LLM에 보내 대조하고, 결과가 실시간으로 표에 색으로 반영됩니다. 끝나면 결과 엑셀을 내려받을 수 있어요.</p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--match-bg)"></i>일치</span>
+      <span><i class="dot" style="background:var(--mismatch-bg)"></i>불일치</span>
+      <span><i class="dot" style="background:var(--check-bg)"></i>확인필요</span>
+      <span><i class="dot" style="background:var(--excluded-bg)"></i>제외</span>
+    </div>
+
+    <!-- 1단계: 업로드 -->
+    <div class="panel">
+      <form id="uploadForm" class="controls">
+        <div class="field">
+          <label for="files">1. 파일 업로드 (엑셀 + 서류 ZIP)</label>
+          <input type="file" name="files" id="files" accept=".zip,.xlsx" multiple required />
+          <small>검증대상 .xlsx 와 서류 .zip 을 함께 선택하세요. (여러 개 선택 가능)</small>
+        </div>
+        <div class="field">
+          <label for="target_columns">2. 검증할 열 이름 (쉼표로 구분)</label>
+          <input type="text" name="target_columns" id="target_columns"
+                 placeholder="예: 사업자번호, 상호명, 계약일자" required />
+          <small>엑셀 헤더에 적힌 이름과 동일하게 입력하세요.</small>
+        </div>
+        <button type="submit" class="btn-primary btn-block" id="uploadBtn">업로드</button>
+      </form>
+    </div>
+
+    <!-- 2단계: 검증 컨트롤 + 진행률 -->
+    <div class="panel hidden" id="runPanel">
+      <div class="actions">
+        <button type="button" class="btn-go" id="startBtn">검증 시작</button>
+        <button type="button" class="btn-download" id="downloadBtn" disabled>결과 엑셀 다운로드</button>
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" id="progFill"></div></div>
+          <div class="progress-text" id="progText">대기 중</div>
+        </div>
+      </div>
+      <div id="status" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- 3단계: 엑셀 표 -->
+    <div class="panel hidden" id="tablePanel">
+      <div class="table-scroll"><div id="tableHost"></div></div>
+    </div>
+  </div>
+
+  <script>
+    const STATUS_CLASS = {
+      "일치": "st-match",
+      "불일치": "st-mismatch",
+      "확인필요": "st-check",
+      "제외": "st-excluded",
+    };
+
+    const els = {
+      uploadForm: document.getElementById('uploadForm'),
+      uploadBtn: document.getElementById('uploadBtn'),
+      runPanel: document.getElementById('runPanel'),
+      tablePanel: document.getElementById('tablePanel'),
+      tableHost: document.getElementById('tableHost'),
+      startBtn: document.getElementById('startBtn'),
+      downloadBtn: document.getElementById('downloadBtn'),
+      progFill: document.getElementById('progFill'),
+      progText: document.getElementById('progText'),
+      status: document.getElementById('status'),
+    };
+
+    let state = { sessionId: null, meta: null, doneCount: 0, total: 0, es: null };
+
+    function cellId(row, col) { return `c-${row}-${col}`; }
+
+    function renderTable(meta) {
+      const targetCols = meta.target_columns;       // {name: colIndex}
+      const targetColSet = new Set(Object.values(targetCols));
+      const verifyRowSet = new Set(meta.verify_rows);
+
+      const tbl = document.createElement('table');
+      tbl.className = 'sheet';
+      const tbody = document.createElement('tbody');
+
+      for (let i = 0; i < meta.cells.length; i++) {
+        const excelRow = i + 1;
+        const tr = document.createElement('tr');
+        const isHeader = excelRow === meta.header_row;
+        if (isHeader) tr.className = 'headerRow';
+
+        const rn = document.createElement('td');
+        rn.className = 'rownum';
+        rn.textContent = excelRow;
+        rn.id = `rn-${excelRow}`;
+        tr.appendChild(rn);
+
+        const rowVals = meta.cells[i];
+        for (let j = 0; j < rowVals.length; j++) {
+          const excelCol = j + 1;
+          const td = document.createElement('td');
+          td.id = cellId(excelRow, excelCol);
+          td.textContent = rowVals[j];
+          td.title = rowVals[j];
+          const isDataRow = excelRow > meta.header_row;
+          if (isHeader && targetColSet.has(excelCol)) td.classList.add('colhdr-target');
+          if (isDataRow && targetColSet.has(excelCol)) td.classList.add('target');
+          // 검증 대상 행의 결과열에 대기 표시
+          if (!isHeader && excelCol === meta.result_col && verifyRowSet.has(excelRow)) {
+            td.textContent = '대기';
+            td.classList.add('st-pending');
+          }
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      tbl.appendChild(tbody);
+      els.tableHost.innerHTML = '';
+      els.tableHost.appendChild(tbl);
+    }
+
+    function applyRowResult(ev) {
+      const meta = state.meta;
+      // 대상 셀 색칠
+      for (const [name, status] of Object.entries(ev.statuses)) {
+        const col = meta.target_columns[name];
+        if (!col) continue;
+        const td = document.getElementById(cellId(ev.row_index, col));
+        if (td) {
+          td.classList.remove('st-pending');
+          td.classList.add(STATUS_CLASS[status] || 'st-check');
+        }
+      }
+      // 결과열 기록
+      const rcell = document.getElementById(cellId(ev.row_index, meta.result_col));
+      if (rcell) {
+        rcell.classList.remove('st-pending');
+        rcell.textContent = ev.result_text;
+        rcell.title = ev.result_text;
+      }
+      const rn = document.getElementById(`rn-${ev.row_index}`);
+      if (rn) rn.parentElement.classList.remove('row-active');
+
+      state.doneCount += 1;
+      updateProgress();
+    }
+
+    function updateProgress() {
+      const pct = state.total ? Math.round((state.doneCount / state.total) * 100) : 0;
+      els.progFill.style.width = pct + '%';
+      els.progText.textContent = `검증 ${state.doneCount} / ${state.total} (${pct}%)`;
+    }
+
+    function setStatus(html, cls) {
+      els.status.innerHTML = cls ? `<span class="${cls}">${html}</span>` : html;
+    }
+
+    // 1) 업로드 & 미리보기
+    els.uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      els.uploadBtn.disabled = true;
+      setStatus('<span class="spinner"></span>엑셀을 읽는 중...');
+      els.runPanel.classList.remove('hidden');
+
+      try {
+        const fd = new FormData(els.uploadForm);
+        const res = await fetch('/api/upload', { method: 'POST', body: fd });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ detail: '알 수 없는 오류' }));
+          setStatus('오류: ' + (data.detail || res.statusText), 'err');
+          els.uploadBtn.disabled = false;
+          return;
+        }
+        const meta = await res.json();
+        state.sessionId = meta.session_id;
+        state.meta = meta;
+        state.doneCount = 0;
+        state.total = meta.verify_rows.length;
+
+        renderTable(meta);
+        els.tablePanel.classList.remove('hidden');
+        els.startBtn.disabled = false;
+        els.downloadBtn.disabled = true;
+        updateProgress();
+        setStatus(`미리보기 완료 — 검증 대상 ${state.total}행. [검증 시작]을 누르세요.`, 'ok');
+      } catch (err) {
+        setStatus('요청 실패: ' + err, 'err');
+      } finally {
+        els.uploadBtn.disabled = false;
+      }
+    });
+
+    // 2) 검증 시작 (SSE 실시간)
+    els.startBtn.addEventListener('click', () => {
+      if (!state.sessionId) return;
+      els.startBtn.disabled = true;
+      els.downloadBtn.disabled = true;
+      state.doneCount = 0;
+      updateProgress();
+      setStatus('<span class="spinner"></span>검증 중... 각 행을 병렬로 처리합니다.');
+
+      // 검증 대상 행에 진행 표시
+      for (const r of state.meta.verify_rows) {
+        const rcell = document.getElementById(cellId(r, state.meta.result_col));
+        if (rcell) { rcell.textContent = '검증 중…'; rcell.className = 'st-pending'; }
+      }
+
+      const es = new EventSource(`/api/verify/stream/${state.sessionId}`);
+      state.es = es;
+      es.onmessage = (msg) => {
+        const ev = JSON.parse(msg.data);
+        if (ev.type === 'start') {
+          state.total = ev.total;
+          updateProgress();
+        } else if (ev.type === 'row') {
+          applyRowResult(ev);
+        } else if (ev.type === 'done') {
+          es.close();
+          state.es = null;
+          els.downloadBtn.disabled = false;
+          els.startBtn.disabled = false;
+          setStatus('완료! ' + (ev.summary || '') + ' — [결과 엑셀 다운로드]를 누르세요.', 'ok');
+        }
+      };
+      es.onerror = () => {
+        es.close();
+        state.es = null;
+        if (state.doneCount < state.total) {
+          setStatus('스트리밍 연결이 끊겼습니다. 다시 [검증 시작]을 눌러 주세요.', 'err');
+          els.startBtn.disabled = false;
+        }
+      };
+    });
+
+    // 3) 결과 다운로드
+    els.downloadBtn.addEventListener('click', async () => {
+      if (!state.sessionId) return;
+      els.downloadBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/download/${state.sessionId}`);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ detail: '알 수 없는 오류' }));
+          setStatus('다운로드 오류: ' + (data.detail || res.statusText), 'err');
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'verified_result.xlsx';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        setStatus('결과 엑셀을 다운로드했습니다.', 'ok');
+      } catch (err) {
+        setStatus('다운로드 실패: ' + err, 'err');
+      } finally {
+        els.downloadBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
