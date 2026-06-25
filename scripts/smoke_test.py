@@ -14,6 +14,10 @@ from pathlib import Path
 
 os.environ["USE_DUMMY_EXTRACTOR"] = "1"
 
+from app.core.logging_config import setup_logging
+
+setup_logging()
+
 from openpyxl import Workbook, load_workbook  # noqa: E402
 
 from app.services.verification_service import verify_zip  # noqa: E402

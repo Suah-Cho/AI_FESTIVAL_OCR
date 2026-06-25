@@ -1,22 +1,34 @@
 """서류 이미지에서 필드 값을 추출하는 서비스.
 
-원칙: "값 추출은 GPT가" 담당한다. (비교/판정은 normalization.py 가 담당)
+원칙: "값 추출은 OCR/LLM이" 담당한다. (비교/판정은 normalization.py 가 담당)
 
-핵심 함수는 ``extract_fields_from_documents(folder_path, field_names) -> dict`` 로,
-나중에 모델/제공자 교체가 쉽도록 분리되어 있다.
+정확도를 높이기 위해 여러 모델 슬롯(OCR_MODEL_1, OCR_MODEL_2 ...)을 돌려
+필드별 '다수결'로 합칠 수 있다. 슬롯은 특정 벤더에 종속되지 않으며,
+``type`` 에 따라 어댑터(호출 방식)가 결정된다. 설정을 바꿔도 검증/판정
+로직은 영향을 받지 않는다.
+
+핵심 진입점은 ``extract_fields_from_documents(folder_path, field_names) -> dict`` 이다.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from app.core.config import get_settings
+from app.core.config import OcrModelSpec, get_settings
+from app.services.api_transport import chat_completion_json, ocr_post, vaiv_chat_json
+from app.services.image_preprocess import read_image_jpeg_bytes
+from app.services.normalization import normalize_value
 
-# GPT에 보낼 이미지 확장자
+logger = logging.getLogger(__name__)
+
+# 추출기에 보낼 이미지 확장자
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 _PDF_EXTS = {".pdf"}
 
@@ -38,6 +50,14 @@ def has_documents(folder_path: str) -> bool:
     return len(_list_document_files(folder_path)) > 0
 
 
+def _list_image_files(folder_path: str) -> list[Path]:
+    settings = get_settings()
+    files = _list_document_files(folder_path)
+    return [f for f in files if f.suffix.lower() in _IMAGE_EXTS][
+        : settings.max_images_per_folder
+    ]
+
+
 def _encode_image(path: Path) -> Optional[dict]:
     """이미지 파일을 OpenAI 비전 입력용 data URL 형식으로 인코딩한다."""
     mime, _ = mimetypes.guess_type(str(path))
@@ -51,10 +71,10 @@ def _encode_image(path: Path) -> Optional[dict]:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
 
 
-def _build_prompt(field_names: list[str]) -> str:
+def _build_prompt(field_names: list[str], extra_text: str = "") -> str:
     fields_str = ", ".join(field_names)
     keys_example = ", ".join(f'"{n}": "..."' for n in field_names)
-    return (
+    prompt = (
         "너는 한국 계약/거래처 서류(사업자등록증, 신분증 등)에서 정보를 추출하는 OCR 도우미야.\n"
         f"첨부된 이미지들에서 다음 항목의 값을 찾아줘: {fields_str}\n\n"
         "규칙:\n"
@@ -63,10 +83,56 @@ def _build_prompt(field_names: list[str]) -> str:
         '- 값을 찾을 수 없으면 빈 문자열("")로 둬.\n'
         "- 추측하지 말고 서류에 적힌 값을 그대로 적어줘.\n"
     )
+    if extra_text:
+        prompt += (
+            "\n참고: 아래는 동일 서류를 다른 OCR 엔진으로 읽은 원문 텍스트야. "
+            "글자 판독에 참고하되, 최종 값은 이미지를 기준으로 판단해.\n"
+            "--- OCR 원문 시작 ---\n"
+            f"{extra_text}\n"
+            "--- OCR 원문 끝 ---\n"
+        )
+    return prompt
 
 
+def _build_vaiv_system_prompt(field_names: list[str]) -> str:
+    fields_str = ", ".join(field_names)
+    keys_example = ", ".join(f'"{n}": "..."' for n in field_names)
+    return (
+        "당신은 한국 계약/거래처 서류(사업자등록증, 신분증 등) OCR 및 정보 추출 전문가입니다.\n"
+        "지침:\n"
+        "- 번역하지 마십시오.\n"
+        "- 추측하지 마십시오.\n"
+        "- 서류에 적힌 값을 그대로 추출하십시오.\n"
+        f"- 반드시 JSON 객체 하나만 출력하십시오: {{{keys_example}}}\n"
+        '- 값을 찾을 수 없으면 빈 문자열("")로 두십시오.\n'
+        f"- JSON 키는 정확히 다음과 같아야 합니다: {fields_str}\n"
+    )
+
+
+def _build_vaiv_user_prompt(field_names: list[str]) -> str:
+    fields_str = ", ".join(field_names)
+    return (
+        f"첨부한 서류 이미지에서 다음 항목의 값을 추출해 주세요: {fields_str}\n"
+        "JSON 형식으로만 응답하십시오."
+    )
+
+
+def _encode_images_b64(folder_path: str, *, preprocess: bool) -> list[str]:
+    images: list[str] = []
+    for img in _list_image_files(folder_path):
+        try:
+            data = read_image_jpeg_bytes(img, preprocess=preprocess)
+        except OSError:
+            continue
+        images.append(base64.b64encode(data).decode("ascii"))
+    return images
+
+
+# ---------------------------------------------------------------------------
+# 더미 추출기 (개발/테스트용)
+# ---------------------------------------------------------------------------
 def _dummy_extract(folder_path: str, field_names: list[str]) -> dict:
-    """GPT 호출 없이 동작 흐름을 확인하기 위한 더미 추출기.
+    """OCR 호출 없이 동작 흐름을 확인하기 위한 더미 추출기.
 
     폴더 안에 ``_mock.json`` 이 있으면 그 내용을 반환하고,
     없으면 모든 필드를 빈 문자열로 반환한다.
@@ -81,20 +147,14 @@ def _dummy_extract(folder_path: str, field_names: list[str]) -> dict:
     return {name: "" for name in field_names}
 
 
-def _real_extract(folder_path: str, field_names: list[str]) -> dict:
-    """OpenAI 비전 모델로 폴더 안 서류에서 값을 추출한다."""
-    from openai import OpenAI  # 지연 임포트: 더미 모드에서는 불필요
-
-    settings = get_settings()
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되지 않았습니다.")
-
-    client = OpenAI(api_key=settings.openai_api_key, timeout=settings.openai_timeout)
-
-    files = _list_document_files(folder_path)
-    image_files = [f for f in files if f.suffix.lower() in _IMAGE_EXTS][
-        : settings.max_images_per_folder
-    ]
+# ---------------------------------------------------------------------------
+# 어댑터 1: OpenAI 호환 비전 API (gpt-4o / gemini / openrouter / 로컬 vLLM 등)
+# ---------------------------------------------------------------------------
+def _extract_openai(
+    spec: OcrModelSpec, folder_path: str, field_names: list[str], temperature: float
+) -> dict:
+    """OpenAI 호환 비전 모델로 폴더 안 서류에서 값을 추출한다."""
+    image_files = _list_image_files(folder_path)
     if not image_files:
         return {name: "" for name in field_names}
 
@@ -105,24 +165,264 @@ def _real_extract(folder_path: str, field_names: list[str]) -> dict:
             content.append(encoded)
 
     try:
-        resp = client.chat.completions.create(
-            model=settings.openai_vision_model,
-            messages=[{"role": "user", "content": content}],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-        raw = resp.choices[0].message.content or "{}"
-        data = json.loads(raw)
+        data = chat_completion_json(spec, content, temperature)
     except json.JSONDecodeError:
         return {name: "" for name in field_names}
     except Exception as exc:  # API 실패/타임아웃 등
-        raise RuntimeError(f"GPT 추출 실패 ({folder_path}): {exc}") from exc
+        raise RuntimeError(
+            f"OCR_MODEL_{spec.index}({spec.name}) 추출 실패 ({folder_path}): {exc}"
+        ) from exc
 
     return {name: str(data.get(name, "") or "") for name in field_names}
 
 
+# ---------------------------------------------------------------------------
+# 어댑터 3: VAIV /api/chat (prod 운영 OCR, 모델명만 슬롯마다 다름)
+# ---------------------------------------------------------------------------
+def _extract_vaiv(
+    spec: OcrModelSpec, folder_path: str, field_names: list[str], temperature: float
+) -> dict:
+    """VAIV /api/chat API로 폴더 안 서류에서 값을 추출한다."""
+    settings = get_settings()
+    images_b64 = _encode_images_b64(
+        folder_path, preprocess=settings.prod_image_preprocess
+    )
+    if not images_b64:
+        return {name: "" for name in field_names}
+
+    try:
+        data = vaiv_chat_json(
+            spec,
+            system_prompt=_build_vaiv_system_prompt(field_names),
+            user_prompt=_build_vaiv_user_prompt(field_names),
+            images_b64=images_b64,
+            temperature=temperature,
+        )
+    except json.JSONDecodeError:
+        return {name: "" for name in field_names}
+    except Exception as exc:
+        raise RuntimeError(
+            f"OCR_MODEL_{spec.index}({spec.name}) 추출 실패 ({folder_path}): {exc}"
+        ) from exc
+
+    return {name: str(data.get(name, "") or "") for name in field_names}
+
+
+# ---------------------------------------------------------------------------
+# 어댑터 2: 전용 OCR(원문 텍스트) + OpenAI 구조화
+#   (CLOVA 등 OpenAI 비호환 OCR 엔진을 슬롯으로 끼우는 예시 어댑터)
+#   슬롯에 _URL / _SECRET 를 주고 TYPE=clova 로 지정하면 동작한다.
+# ---------------------------------------------------------------------------
+def _clova_raw_text(spec: OcrModelSpec, folder_path: str) -> str:
+    """전용 OCR 엔드포인트로 폴더 안 이미지의 원문 텍스트를 추출해 합쳐 반환한다."""
+    settings = get_settings()
+    image_files = _list_image_files(folder_path)
+    texts: list[str] = []
+    for img in image_files:
+        ext = img.suffix.lower().lstrip(".")
+        fmt = "jpg" if ext in {"jpg", "jpeg"} else ext
+        payload = {
+            "version": "V2",
+            "requestId": "verify",
+            "timestamp": 0,
+            "images": [{"format": fmt, "name": img.stem}],
+        }
+        files = {
+            "message": (None, json.dumps(payload), "application/json"),
+            "file": (img.name, img.read_bytes(), f"image/{fmt}"),
+        }
+        data = ocr_post(
+            url=spec.url,
+            secret=spec.secret,
+            files=files,
+            timeout=settings.openai_timeout,
+        )
+        for image in data.get("images", []):
+            words = [f.get("inferText", "") for f in image.get("fields", [])]
+            if words:
+                texts.append(" ".join(words))
+    return "\n".join(texts)
+
+
+def _extract_clova(
+    spec: OcrModelSpec, folder_path: str, field_names: list[str], temperature: float
+) -> dict:
+    """전용 OCR 원문을 OpenAI에 함께 넣어 필드를 구조화 추출한다.
+
+    구조화(텍스트→필드 매핑)에는 전역 OPENAI_* 설정을 사용한다.
+    """
+    image_files = _list_image_files(folder_path)
+    if not image_files:
+        return {name: "" for name in field_names}
+
+    try:
+        raw_text = _clova_raw_text(spec, folder_path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"OCR_MODEL_{spec.index}({spec.name}) OCR 실패 ({folder_path}): {exc}"
+        ) from exc
+
+    content: list[dict] = [
+        {"type": "text", "text": _build_prompt(field_names, extra_text=raw_text)}
+    ]
+    for img in image_files:
+        encoded = _encode_image(img)
+        if encoded:
+            content.append(encoded)
+
+    settings = get_settings()
+    struct_spec = OcrModelSpec(
+        index=spec.index,
+        type="openai",
+        model=settings.openai_vision_model,
+        api_key=settings.openai_api_key,
+        label=f"{spec.name}+openai",
+    )
+    try:
+        data = chat_completion_json(struct_spec, content, temperature)
+    except json.JSONDecodeError:
+        return {name: "" for name in field_names}
+    except Exception as exc:
+        raise RuntimeError(
+            f"OCR_MODEL_{spec.index}({spec.name}) 구조화 실패 ({folder_path}): {exc}"
+        ) from exc
+
+    return {name: str(data.get(name, "") or "") for name in field_names}
+
+
+# type -> 어댑터 함수 (spec, folder, fields, temperature) -> dict
+_ADAPTERS: dict[str, Callable[[OcrModelSpec, str, list[str], float], dict]] = {
+    "openai": _extract_openai,
+    "vaiv": _extract_vaiv,
+    "clova": _extract_clova,
+}
+
+
+@dataclass
+class _Candidate:
+    label: str
+    data: dict
+
+
+def _slot_label(spec: OcrModelSpec, sample_index: int) -> str:
+    return f"OCR_MODEL_{spec.index}[{spec.type}/{spec.model}]#{sample_index + 1}"
+
+
+def _merge_candidates(candidates: list[_Candidate], field_names: list[str]) -> dict:
+    """여러 추출 결과를 필드별 다수결로 병합한다."""
+    merged: dict = {}
+    for name in field_names:
+        votes: dict[str, dict] = {}
+        for order, cand in enumerate(candidates):
+            raw = str(cand.data.get(name, "") or "").strip()
+            if not raw:
+                continue
+            key = normalize_value(raw) or raw
+            slot = votes.get(key)
+            if slot is None:
+                votes[key] = {"count": 1, "order": order, "raw": raw, "sources": [cand.label]}
+            else:
+                slot["count"] += 1
+                slot["sources"].append(cand.label)
+        if not votes:
+            merged[name] = ""
+            logger.info("다수결 [%s] 후보 없음 → ''", name)
+            continue
+        best = min(votes.values(), key=lambda v: (-v["count"], v["order"]))
+        merged[name] = best["raw"]
+        vote_summary = ", ".join(
+            f"{v['raw']!r}×{v['count']}({'+'.join(v['sources'])})" for v in votes.values()
+        )
+        logger.info(
+            "다수결 [%s] → %r (득표: %d/%d) | 후보: %s",
+            name,
+            best["raw"],
+            best["count"],
+            len(candidates),
+            vote_summary,
+        )
+    return merged
+
+
+def _real_extract(folder_path: str, field_names: list[str]) -> dict:
+    """설정된 모델 슬롯들을 (반복 호출 포함) 돌려 다수결로 합친 결과를 반환한다."""
+    settings = get_settings()
+    samples = settings.ocr_samples_per_model
+    model_list = [
+        f"OCR_MODEL_{s.index}[{s.type}/{s.model}]" for s in settings.ocr_models
+    ]
+
+    logger.info(
+        "추출 시작 env=%s folder=%s fields=%s models=%s samples=%d",
+        settings.app_env,
+        folder_path,
+        field_names,
+        model_list,
+        samples,
+    )
+
+    candidates: list[_Candidate] = []
+    last_error: Optional[Exception] = None
+    for spec in settings.ocr_models:
+        adapter = _ADAPTERS.get(spec.type)
+        if adapter is None:
+            logger.warning("알 수 없는 어댑터 type=%s slot=%d → 건너뜀", spec.type, spec.index)
+            continue
+        for i in range(samples):
+            label = _slot_label(spec, i)
+            temperature = 0.0 if i == 0 else settings.ocr_sample_temperature
+            logger.info(
+                "모델 호출 시작 %s temp=%.2f folder=%s",
+                label,
+                temperature,
+                folder_path,
+            )
+            started = time.perf_counter()
+            try:
+                result = adapter(spec, folder_path, field_names, temperature)
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                candidates.append(_Candidate(label=label, data=result))
+                logger.info(
+                    "모델 호출 성공 %s %.0fms result=%s",
+                    label,
+                    elapsed_ms,
+                    result,
+                )
+            except Exception as exc:
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                last_error = exc
+                logger.warning(
+                    "모델 호출 실패 %s %.0fms error=%s",
+                    label,
+                    elapsed_ms,
+                    exc,
+                )
+                continue
+
+    if not candidates:
+        logger.error(
+            "추출 실패 folder=%s — 모든 모델 호출 실패 (마지막 오류: %s)",
+            folder_path,
+            last_error,
+        )
+        if last_error is not None:
+            raise RuntimeError(str(last_error))
+        return {name: "" for name in field_names}
+
+    if len(candidates) == 1:
+        logger.info("단일 모델 결과 사용 folder=%s result=%s", folder_path, candidates[0].data)
+        return candidates[0].data
+
+    logger.info("다수결 병합 시작 folder=%s 후보 %d개", folder_path, len(candidates))
+    merged = _merge_candidates(candidates, field_names)
+    logger.info("추출 완료 folder=%s merged=%s", folder_path, merged)
+    return merged
+
+
 def extract_fields_from_documents(folder_path: str, field_names: list[str]) -> dict:
     """폴더 안 서류에서 지정한 필드 값을 추출한다.
+
+    설정된 모델 슬롯(OCR_MODEL_N)들을 돌려 필드별 다수결로 합친다.
 
     Args:
         folder_path: ``{파일폴더}/{파일번호}`` 경로.
@@ -134,5 +434,6 @@ def extract_fields_from_documents(folder_path: str, field_names: list[str]) -> d
     if not field_names:
         return {}
     if get_settings().use_dummy_extractor:
+        logger.info("더미 추출기 사용 folder=%s fields=%s", folder_path, field_names)
         return _dummy_extract(folder_path, field_names)
     return _real_extract(folder_path, field_names)

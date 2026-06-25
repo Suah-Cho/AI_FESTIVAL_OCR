@@ -12,10 +12,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import STATIC_DIR
+from app.core.logging_config import setup_logging
 from app.routers import verification
 
 
 def create_app() -> FastAPI:
+    setup_logging()
     app = FastAPI(title="계약 서류 자동 검증 서비스")
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

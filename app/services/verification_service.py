@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import zipfile
@@ -31,6 +32,8 @@ from app.services.normalization import (
     NEEDS_CHECK,
     compare_values,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class VerificationError(Exception):
@@ -249,9 +252,18 @@ def verify_row(prepared: PreparedSheet, plan: RowPlan) -> RowResult:
             statuses[name] = NEEDS_CHECK
         return RowResult(plan.row_index, statuses, "확인필요(서류 폴더 없음)", kind="no_docs")
 
+    logger.info(
+        "행 검증 시작 row=%d folder=%s/%s fields=%s",
+        plan.row_index,
+        plan.folder_val,
+        plan.file_no_val,
+        prepared.target_columns,
+    )
+
     try:
         extracted = extract_fields_from_documents(plan.doc_folder, prepared.target_columns)
     except Exception as exc:  # GPT 실패/타임아웃 등 → 행 단위로 격리
+        logger.error("행 검증 추출 오류 row=%d error=%s", plan.row_index, exc)
         for name in prepared.target_columns:
             statuses[name] = NEEDS_CHECK
         return RowResult(
@@ -266,8 +278,17 @@ def verify_row(prepared: PreparedSheet, plan: RowPlan) -> RowResult:
         if status != MATCH:
             fails.append(f"{name}:{status}")
 
+    result_text = "OK" if not fails else ", ".join(fails)
+    logger.info(
+        "행 검증 완료 row=%d result=%s extracted=%s statuses=%s",
+        plan.row_index,
+        result_text,
+        extracted,
+        statuses,
+    )
+
     return RowResult(
-        plan.row_index, statuses, "OK" if not fails else ", ".join(fails), kind="verified"
+        plan.row_index, statuses, result_text, kind="verified"
     )
 
 
