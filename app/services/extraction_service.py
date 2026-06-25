@@ -24,6 +24,19 @@ from typing import Callable, Optional
 
 from app.core.config import OcrModelSpec, get_settings
 from app.services.api_transport import chat_completion_json, ocr_post, vaiv_chat_json
+from app.services.document_routing import (
+    DOC_TYPE_BUSINESS,
+    DOC_TYPE_CONTACT,
+    DOC_TYPE_FALLBACK,
+    DOC_TYPE_ID,
+    doc_hint_for_group,
+    group_fields_by_doc_type,
+    group_files_by_doc_type,
+    list_image_files,
+    resolve_files_for_group,
+    should_split_extraction,
+)
+from app.services.field_aliases import build_field_alias_hints, get_field_value, is_valid_rrn_format
 from app.services.image_preprocess import read_image_jpeg_bytes
 from app.services.normalization import normalize_value
 
@@ -51,12 +64,15 @@ def has_documents(folder_path: str) -> bool:
     return len(_list_document_files(folder_path)) > 0
 
 
-def _list_image_files(folder_path: str) -> list[Path]:
+def _list_image_files(
+    folder_path: str, *, only_files: list[Path] | None = None
+) -> list[Path]:
     settings = get_settings()
-    files = _list_document_files(folder_path)
-    return [f for f in files if f.suffix.lower() in _IMAGE_EXTS][
-        : settings.max_images_per_folder
-    ]
+    image_files = list_image_files(folder_path)
+    if only_files is not None:
+        allowed = {p.resolve() for p in only_files}
+        image_files = [f for f in image_files if f.resolve() in allowed]
+    return image_files[: settings.max_images_per_folder]
 
 
 def _encode_image(path: Path) -> Optional[dict]:
@@ -82,6 +98,9 @@ def _build_prompt(
     )
     if doc_hint:
         prompt += f"{doc_hint.strip()}\n"
+    alias_hint = build_field_alias_hints(field_names)
+    if alias_hint:
+        prompt += f"{alias_hint}\n"
     prompt += (
         f"첨부된 이미지들에서 다음 항목의 값을 찾아줘: {fields_str}\n\n"
         "규칙:\n"
@@ -109,6 +128,9 @@ def _build_vaiv_system_prompt(field_names: list[str], *, doc_hint: str = "") -> 
     )
     if doc_hint:
         prompt += f"{doc_hint.strip()}\n"
+    alias_hint = build_field_alias_hints(field_names)
+    if alias_hint:
+        prompt += f"{alias_hint}\n"
     prompt += (
         "지침:\n"
         "- 번역하지 마십시오.\n"
@@ -129,9 +151,11 @@ def _build_vaiv_user_prompt(field_names: list[str]) -> str:
     )
 
 
-def _encode_images_b64(folder_path: str, *, preprocess: bool) -> list[str]:
+def _encode_images_b64(
+    folder_path: str, *, preprocess: bool, only_files: list[Path] | None = None
+) -> list[str]:
     images: list[str] = []
-    for img in _list_image_files(folder_path):
+    for img in _list_image_files(folder_path, only_files=only_files):
         try:
             data = read_image_jpeg_bytes(img, preprocess=preprocess)
         except OSError:
@@ -153,7 +177,8 @@ def _dummy_extract(folder_path: str, field_names: list[str]) -> dict:
     if mock_path.is_file():
         try:
             data = json.loads(mock_path.read_text(encoding="utf-8"))
-            return {name: str(data.get(name, "")) for name in field_names}
+            str_data = {str(k): str(v) for k, v in data.items()}
+            return {name: get_field_value(str_data, name) for name in field_names}
         except (OSError, json.JSONDecodeError):
             pass
     return {name: "" for name in field_names}
@@ -169,9 +194,10 @@ def _extract_openai(
     temperature: float,
     *,
     doc_hint: str = "",
+    only_files: list[Path] | None = None,
 ) -> dict:
     """OpenAI 호환 비전 모델로 폴더 안 서류에서 값을 추출한다."""
-    image_files = _list_image_files(folder_path)
+    image_files = _list_image_files(folder_path, only_files=only_files)
     if not image_files:
         return {name: "" for name in field_names}
 
@@ -205,11 +231,14 @@ def _extract_vaiv(
     temperature: float,
     *,
     doc_hint: str = "",
+    only_files: list[Path] | None = None,
 ) -> dict:
     """VAIV /api/chat API로 폴더 안 서류에서 값을 추출한다."""
     settings = get_settings()
     images_b64 = _encode_images_b64(
-        folder_path, preprocess=settings.prod_image_preprocess
+        folder_path,
+        preprocess=settings.prod_image_preprocess,
+        only_files=only_files,
     )
     if not images_b64:
         return {name: "" for name in field_names}
@@ -237,10 +266,12 @@ def _extract_vaiv(
 #   (CLOVA 등 OpenAI 비호환 OCR 엔진을 슬롯으로 끼우는 예시 어댑터)
 #   슬롯에 _URL / _SECRET 를 주고 TYPE=clova 로 지정하면 동작한다.
 # ---------------------------------------------------------------------------
-def _clova_raw_text(spec: OcrModelSpec, folder_path: str) -> str:
+def _clova_raw_text(
+    spec: OcrModelSpec, folder_path: str, *, only_files: list[Path] | None = None
+) -> str:
     """전용 OCR 엔드포인트로 폴더 안 이미지의 원문 텍스트를 추출해 합쳐 반환한다."""
     settings = get_settings()
-    image_files = _list_image_files(folder_path)
+    image_files = _list_image_files(folder_path, only_files=only_files)
     texts: list[str] = []
     for img in image_files:
         ext = img.suffix.lower().lstrip(".")
@@ -275,17 +306,18 @@ def _extract_clova(
     temperature: float,
     *,
     doc_hint: str = "",
+    only_files: list[Path] | None = None,
 ) -> dict:
     """전용 OCR 원문을 OpenAI에 함께 넣어 필드를 구조화 추출한다.
 
     구조화(텍스트→필드 매핑)에는 전역 OPENAI_* 설정을 사용한다.
     """
-    image_files = _list_image_files(folder_path)
+    image_files = _list_image_files(folder_path, only_files=only_files)
     if not image_files:
         return {name: "" for name in field_names}
 
     try:
-        raw_text = _clova_raw_text(spec, folder_path)
+        raw_text = _clova_raw_text(spec, folder_path, only_files=only_files)
     except Exception as exc:
         raise RuntimeError(
             f"OCR_MODEL_{spec.index}({spec.name}) OCR 실패 ({folder_path}): {exc}"
@@ -378,7 +410,10 @@ def _looks_like_korean_address(address: str) -> bool:
 
 
 def _rrn_field_value(fields: dict) -> str:
-    return str(fields.get("주민등록번호", "") or fields.get("주민번호", "") or "").strip()
+    val = get_field_value(fields, "주민등록번호")
+    if val and not is_valid_rrn_format(val):
+        return ""
+    return val
 
 
 def _rrn_seventh_digit(rrn: str) -> str | None:
@@ -470,7 +505,11 @@ def _merge_candidates(candidates: list[_Candidate], field_names: list[str]) -> d
 
 
 def _real_extract(
-    folder_path: str, field_names: list[str], *, doc_hint: str = ""
+    folder_path: str,
+    field_names: list[str],
+    *,
+    doc_hint: str = "",
+    only_files: list[Path] | None = None,
 ) -> dict:
     """설정된 모델 슬롯들을 (반복 호출 포함) 돌려 다수결로 합친 결과를 반환한다."""
     settings = get_settings()
@@ -480,12 +519,13 @@ def _real_extract(
     ]
 
     logger.info(
-        "추출 시작 env=%s folder=%s fields=%s models=%s samples=%d",
+        "추출 시작 env=%s folder=%s fields=%s models=%s samples=%d images=%s",
         settings.app_env,
         folder_path,
         field_names,
         model_list,
         samples,
+        len(only_files) if only_files is not None else "all",
     )
 
     candidates: list[_Candidate] = []
@@ -507,7 +547,12 @@ def _real_extract(
             started = time.perf_counter()
             try:
                 result = adapter(
-                    spec, folder_path, field_names, temperature, doc_hint=doc_hint
+                    spec,
+                    folder_path,
+                    field_names,
+                    temperature,
+                    doc_hint=doc_hint,
+                    only_files=only_files,
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 candidates.append(_Candidate(label=label, data=result))
@@ -551,6 +596,56 @@ def _real_extract(
     return merged
 
 
+def _split_extract(
+    folder_path: str,
+    field_names: list[str],
+    *,
+    doc_hint: str = "",
+) -> dict:
+    """서류 종류·필드 종류별로 LLM 호출을 나눈 뒤 결과를 합친다."""
+    file_groups = group_files_by_doc_type(folder_path)
+    field_groups = group_fields_by_doc_type(field_names)
+    all_images = list_image_files(folder_path)
+
+    logger.info(
+        "서류별 분리 추출 folder=%s field_groups=%s file_counts=%s",
+        folder_path,
+        {k: v for k, v in field_groups.items() if v},
+        {k: len(v) for k, v in file_groups.items() if v},
+    )
+
+    merged = {name: "" for name in field_names}
+    # fallback 필드는 마지막에 처리 (분류된 서류 우선)
+    order = [
+        DOC_TYPE_BUSINESS,
+        DOC_TYPE_ID,
+        DOC_TYPE_CONTACT,
+        DOC_TYPE_FALLBACK,
+    ]
+
+    for doc_type in order:
+        fields = field_groups.get(doc_type, [])
+        if not fields:
+            continue
+        paths = resolve_files_for_group(doc_type, file_groups, all_images)
+        if not paths:
+            continue
+        hint = doc_hint_for_group(doc_type, doc_hint)
+        partial = _real_extract(
+            folder_path,
+            fields,
+            doc_hint=hint,
+            only_files=paths,
+        )
+        for name, value in partial.items():
+            if value:
+                merged[name] = value
+
+    _apply_field_inferences(merged, field_names)
+    logger.info("서류별 분리 추출 완료 folder=%s result=%s", folder_path, merged)
+    return merged
+
+
 def extract_fields_from_documents(
     folder_path: str,
     field_names: list[str],
@@ -574,4 +669,8 @@ def extract_fields_from_documents(
     if get_settings().use_dummy_extractor:
         logger.info("더미 추출기 사용 folder=%s fields=%s", folder_path, field_names)
         return _apply_field_inferences(_dummy_extract(folder_path, field_names), field_names)
+
+    settings = get_settings()
+    if settings.split_doc_extraction and should_split_extraction(field_names, folder_path):
+        return _split_extract(folder_path, field_names, doc_hint=doc_hint)
     return _real_extract(folder_path, field_names, doc_hint=doc_hint)

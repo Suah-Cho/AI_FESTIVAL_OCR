@@ -143,11 +143,15 @@ async def extract_stream(session_id: str):
             for coro in asyncio.as_completed(tasks):
                 unit_index, result = await coro
                 fes.apply_extraction_result(prepared, unit_index, result)
+                display, titles = fes.display_fields_for_result(
+                    prepared.field_names, result.fields
+                )
                 yield _sse(
                     {
                         "type": "row",
                         "row_index": unit_index + 2,
-                        "fields": result.fields,
+                        "fields": display,
+                        "field_titles": titles,
                         "note": result.error or "OK",
                         "error": result.error,
                     }

@@ -13,7 +13,9 @@ from pathlib import Path
 
 from app.core.config import get_settings
 from app.schemas.extraction import get_doc_type_preset
+from app.services.document_routing import build_mixed_doc_hint, has_mixed_field_types
 from app.services.extraction_service import extract_fields_from_documents
+from app.services.field_aliases import format_extracted_field, is_rrn_field
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ def prepare_zip_extraction(
 ) -> PreparedExtraction:
     """ZIP을 풀고 추출 대상 목록·미리보기 표를 만든다. (LLM 호출 없음)"""
     field_names = parse_target_fields(target_fields)
-    doc_hint = resolve_doc_hint(doc_type or None)
+    doc_hint = resolve_doc_hint(doc_type or None, field_names)
     root = prepare_zip_root(zip_path)
     units = group_document_units(root, BATCH_PER_FOLDER)
     if not units:
@@ -119,7 +121,7 @@ def suggest_field_format(field_name: str) -> str:
         return "000-0000-0000"
     if any(k in name for k in ("생년월일", "연월일", "개업일", "계약일", "일자", "날짜")):
         return "YYYY-MM-DD"
-    if "주민" in name:
+    if "주민" in name or is_rrn_field(name):
         return "000000-0000000"
     if "사업자" in name and "번호" in name:
         return "000-00-00000"
@@ -178,6 +180,21 @@ def extract_unit(prepared: PreparedExtraction, unit_index: int) -> ExtractionIte
     return _extract_one_unit_fields(unit, prepared.field_names, hint)
 
 
+def display_fields_for_result(
+    field_names: list[str], fields: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """화면/SSE용 표시값과 툴팁(원본) dict."""
+    display: dict[str, str] = {}
+    titles: dict[str, str] = {}
+    for name in field_names:
+        raw = fields.get(name, "") or ""
+        disp, title = format_extracted_field(name, raw)
+        display[name] = disp
+        if title and title != disp:
+            titles[name] = title
+    return display, titles
+
+
 def apply_extraction_result(
     prepared: PreparedExtraction,
     unit_index: int,
@@ -188,8 +205,9 @@ def apply_extraction_result(
     row = unit_index + 1
     prepared.cells[row][0] = result.label
     for i, name in enumerate(prepared.field_names):
-        val = result.fields.get(name, "") or ""
-        prepared.cells[row][i + 1] = val if val else "(없음)"
+        raw = result.fields.get(name, "") or ""
+        display, title = format_extracted_field(name, raw)
+        prepared.cells[row][i + 1] = display
 
 
 def finalize_extraction(
@@ -277,11 +295,17 @@ def parse_target_fields(text: str) -> list[str]:
     return names
 
 
-def resolve_doc_hint(doc_type: str | None) -> str:
-    if not doc_type or not doc_type.strip():
-        return ""
-    preset = get_doc_type_preset(doc_type.strip())
-    return preset.doc_hint if preset else ""
+def resolve_doc_hint(doc_type: str | None, field_names: list[str] | None = None) -> str:
+    names = field_names or []
+    if doc_type and doc_type.strip():
+        key = doc_type.strip()
+        if key == "mixed_contract" and names:
+            return build_mixed_doc_hint(names)
+        preset = get_doc_type_preset(key)
+        return preset.doc_hint if preset else ""
+    if names and has_mixed_field_types(names):
+        return build_mixed_doc_hint(names)
+    return ""
 
 
 def prepare_zip_root(zip_path: str) -> Path:
@@ -435,7 +459,10 @@ def write_extraction_excel(
         ws.append(
             [
                 item.label,
-                *[item.fields.get(name, "") or "" for name in field_names],
+                *[
+                    format_extracted_field(name, item.fields.get(name, "") or "")[0]
+                    for name in field_names
+                ],
             ]
         )
     wb.save(output_path)
@@ -452,7 +479,7 @@ def run_zip_extraction(
 ) -> tuple[str, list[ExtractionItemResult]]:
     """ZIP 일괄 추출 후 엑셀 경로와 결과 목록을 반환한다."""
     field_names = parse_target_fields(target_fields)
-    doc_hint = resolve_doc_hint(doc_type or None)
+    doc_hint = resolve_doc_hint(doc_type or None, field_names)
     root = prepare_zip_root(zip_path)
     items = extract_batch_fields(root, field_names, batch_mode, doc_hint=doc_hint)
 

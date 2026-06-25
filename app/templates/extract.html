@@ -43,6 +43,7 @@
     .table-toolbar-label { font-size:13px; font-weight:700; color:var(--text); }
     .table-toolbar-hint { font-size:11px; color:var(--muted); margin-top:2px; }
     table.sheet td.target { box-shadow:inset 0 0 0 1px rgba(2,34,122,.35); }
+    td.st-check { background:var(--check-bg) !important; color:var(--cell-ink) !important; }
     .modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:20px; }
     .modal.hidden { display:none; }
     .modal-backdrop { position:absolute; inset:0; background:rgba(15,23,42,.45); }
@@ -90,6 +91,7 @@
         <main class="app-main">
         <h1>서류 정보 추출</h1>
         <p class="desc">서류 ZIP을 올리고 추출할 항목을 입력하면 미리보기 표가 표시됩니다.
+        파일명에 <code>사업자</code>·<code>신분</code> 등이 포함되면 서류 종류별로 나눠 추출합니다.
         파란 열 아래 「형식 지정」으로 출력 형식을 설정한 뒤 [추출 시작]을 누르세요.</p>
 
         <div class="panel">
@@ -194,7 +196,7 @@
 
     function chipsForField(name, suggestion) {
       if (/전화/.test(name)) return FORMAT_CHIPS.phone;
-      if (/주민/.test(name)) return FORMAT_CHIPS.rrn;
+      if (/주민|실명번호/.test(name)) return FORMAT_CHIPS.rrn;
       if (/사업자/.test(name) && /번호/.test(name)) return FORMAT_CHIPS.biz;
       if (/생년월일|연월일|개업|일자|날짜/.test(name)) return FORMAT_CHIPS.date;
       if (suggestion) return [suggestion];
@@ -349,7 +351,8 @@
         renderPresets(data.doc_types || []);
       } catch {
         renderPresets([
-          { key: 'business_registration', label: '사업자등록증', fields: ['대표자 전화번호', '대표 전화번호', '개업연월일'] },
+          { key: 'mixed_contract', label: '사업자+신분증 (혼합)', fields: ['대표자명', '상호명', '사업자번호', '실명번호', '휴대전화', '성별', '생년월일', '국적'] },
+          { key: 'business_registration', label: '사업자등록증', fields: ['대표자명', '상호명', '사업자번호', '대표자 전화번호', '대표 전화번호', '개업연월일'] },
           { key: 'id_card', label: '신분증', fields: ['국적', '성명', '성별', '생년월일', '주소', '주민등록번호'] },
         ]);
       }
@@ -444,7 +447,9 @@
         const td = document.getElementById(cellId(ev.row_index, col));
         if (td) {
           td.textContent = value || '(없음)';
-          td.title = td.textContent;
+          const title = (ev.field_titles && ev.field_titles[name]) || td.textContent;
+          td.title = title;
+          td.classList.toggle('st-check', td.textContent === '(확인필요)');
         }
       }
 

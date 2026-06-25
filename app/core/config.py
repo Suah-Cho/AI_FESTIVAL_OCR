@@ -87,6 +87,8 @@ class Settings:
         self.max_images_per_folder: int = int(os.environ.get("MAX_IMAGES_PER_FOLDER", "8"))
         # 행 검증을 동시에 처리할 최대 개수 (병렬 LLM 호출 수)
         self.max_parallel_rows: int = int(os.environ.get("MAX_PARALLEL_ROWS", "5"))
+        # 폴더 안 서류·필드를 종류별로 나눠 LLM 호출 (0 이면 기존 일괄 추출)
+        self.split_doc_extraction: bool = os.environ.get("USE_SPLIT_DOC_EXTRACTION", "1") == "1"
 
         # --- 멀티 OCR(앙상블) 설정 ---
         # 모델 슬롯은 OCR_MODEL_1, OCR_MODEL_2 ... 로 순서대로 정의한다.

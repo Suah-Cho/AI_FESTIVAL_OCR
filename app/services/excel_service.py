@@ -14,6 +14,8 @@ from typing import Optional
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
+from app.services.field_aliases import expanded_header_norms, find_column_index
+
 # 색상 정의 (요구사항)
 FILL_MISMATCH = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # 빨강
 FILL_NEEDS_CHECK = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")  # 노랑
@@ -40,12 +42,12 @@ class HeaderLayout:
     raw_headers: dict[int, str] = field(default_factory=dict)  # 열 -> 원본 헤더 텍스트
 
     def find_column(self, name: str) -> Optional[int]:
-        return self.column_index.get(_norm_header(name))
+        return find_column_index(self.column_index, name)
 
 
 def detect_header_row(ws: Worksheet, candidate_names: list[str]) -> Optional[HeaderLayout]:
     """후보 열 이름들이 가장 많이 매칭되는 행을 헤더 행으로 판단한다."""
-    wanted = {_norm_header(n) for n in candidate_names if _norm_header(n)}
+    wanted = expanded_header_norms(candidate_names)
     if not wanted:
         return None
 

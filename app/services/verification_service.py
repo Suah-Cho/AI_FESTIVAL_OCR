@@ -25,6 +25,7 @@ from app.services.extraction_service import (
     extract_fields_from_documents,
     has_documents,
 )
+from app.services.field_aliases import is_rrn_field, is_valid_rrn_format
 from app.services.normalization import (
     EXCLUDED,
     MATCH,
@@ -273,7 +274,13 @@ def verify_row(prepared: PreparedSheet, plan: RowPlan) -> RowResult:
     fails: list[str] = []
     for name, col in plan.expected.items():
         expected = _cell_text(prepared.ws.cell(row=plan.row_index, column=col).value)
-        status = compare_values(expected, extracted.get(name, ""))
+        extracted_val = extracted.get(name, "")
+        if is_rrn_field(name) and _cell_text(extracted_val) and not is_valid_rrn_format(
+            extracted_val
+        ):
+            status = NEEDS_CHECK
+        else:
+            status = compare_values(expected, extracted_val)
         statuses[name] = status
         if status != MATCH:
             fails.append(f"{name}:{status}")
