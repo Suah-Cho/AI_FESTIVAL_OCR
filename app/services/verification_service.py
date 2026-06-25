@@ -300,13 +300,24 @@ def apply_row_result(prepared: PreparedSheet, result: RowResult) -> None:
     """
     for name, status in result.statuses.items():
         col = prepared.resolved.get(name)
-        if col is not None:
+        if col is not None and status != MATCH:
             xl.fill_cell(prepared.ws, result.row_index, col, _status_to_fill(status))
         if result.kind != "excluded":
             prepared.counts[status] = prepared.counts.get(status, 0) + 1
     if result.kind == "excluded":
         prepared.counts[EXCLUDED] = prepared.counts.get(EXCLUDED, 0) + 1
     prepared.ws.cell(row=result.row_index, column=prepared.result_col, value=result.result_text)
+
+
+def apply_cell_edits(prepared: PreparedSheet, edits: list[dict]) -> None:
+    """화면에서 수정한 셀 값을 워크북에 반영하고 강조 색을 제거한다."""
+    for edit in edits:
+        row = int(edit["row"])
+        col = int(edit["col"])
+        value = edit.get("value", "")
+        prepared.ws.cell(row=row, column=col, value=value)
+        prepared.cells[row - 1][col - 1] = value
+        xl.clear_cell_fill(prepared.ws, row, col)
 
 
 def finalize(prepared: PreparedSheet, output_path: Optional[str] = None) -> str:

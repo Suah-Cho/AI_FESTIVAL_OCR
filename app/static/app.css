@@ -1,0 +1,324 @@
+/* 공통 레이아웃 — 파일철 탭 + 95vh 셸 내부 스크롤 */
+
+:root {
+  --bg: #e8edf4;
+  --shell: #ffffff;
+  --card: #f8fafc;
+  --accent: #02227a;
+  --text: #1e293b;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --input-bg: #ffffff;
+  --tab-bg: #eef2f8;
+  --tab-bg-hover: #e4eaf3;
+  --tab-border: #d5deea;
+  --shell-shadow: 0 10px 36px rgba(15, 23, 42, 0.11), 0 2px 8px rgba(15, 23, 42, 0.06);
+  --match-bg: #C6EFCE;
+  --mismatch-bg: #FFC7CE;
+  --check-bg: #FFEB9C;
+  --excluded-bg: #E2E8F0;
+  --cell-ink: #1e293b;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* 바깥은 고정 — 스크롤 없음 */
+.page-wrap {
+  height: 100vh;
+  padding: 0 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(2, 34, 122, 0.07), transparent),
+    var(--bg);
+}
+
+/* 파일철 + 흰 본문 (세로 95%) */
+.binder {
+  width: 100%;
+  max-width: 1100px;
+  height: 95vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 왼쪽 상단 — 파일철 인덱스 탭 */
+.folder-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  padding: 0 0 0 12px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+}
+
+.folder-tabs a {
+  position: relative;
+  display: inline-block;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding: 9px 22px 8px;
+  color: var(--muted);
+  background: linear-gradient(180deg, #f8fafc 0%, var(--tab-bg) 100%);
+  border: 1px solid var(--tab-border);
+  border-bottom: none;
+  border-radius: 9px 9px 0 0;
+  top: 3px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: top 0.18s ease, color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.folder-tabs a:hover:not(.active) {
+  color: var(--accent);
+  background: linear-gradient(180deg, #fff 0%, var(--tab-bg-hover) 100%);
+  top: 2px;
+}
+
+.folder-tabs a.active {
+  top: 0;
+  padding: 7px 22px 10px;
+  color: var(--accent);
+  font-weight: 700;
+  background: var(--shell);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--shell);
+  margin-bottom: -1px;
+  z-index: 3;
+  box-shadow: none;
+}
+
+.app-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--shell);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 0 16px 16px 16px;
+  box-shadow: var(--shell-shadow);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.app-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 28px 28px 28px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.app-main::-webkit-scrollbar { width: 8px; }
+.app-main::-webkit-scrollbar-track { background: transparent; }
+.app-main::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+  border: 2px solid var(--shell);
+}
+
+h1 {
+  font-size: 21px;
+  margin: 0 0 6px;
+  letter-spacing: -0.025em;
+  color: var(--text);
+}
+
+p.desc {
+  color: var(--muted);
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+p.desc a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.legend { margin: 0 0 20px; }
+.legend span {
+  display: inline-block;
+  margin-right: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.panel {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field.full { grid-column: 1 / -1; }
+
+label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+input[type=text],
+input[type=file] {
+  width: 100%;
+  height: 42px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+input[type=text] { padding: 9px 11px; }
+input[type=file] { padding: 6px 10px; line-height: 30px; }
+
+input[type=text]:focus,
+input[type=file]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(2, 34, 122, 0.18);
+}
+
+input[type=file]::file-selector-button {
+  height: 30px;
+  background: #e2e8f0;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  padding: 0 14px;
+  border-radius: 7px;
+  margin-right: 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+input[type=file]:hover::file-selector-button { background: #cbd5e1; }
+
+small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+button {
+  border: none;
+  border-radius: 9px;
+  padding: 11px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, filter 0.15s;
+}
+
+button:hover:not(:disabled) { filter: brightness(1.05); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary,
+.btn-go {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-download {
+  background: #fff;
+  color: var(--accent);
+  border: 1.5px solid var(--accent);
+}
+
+.btn-download:hover:not(:disabled) {
+  background: #eef2ff;
+  filter: none;
+}
+
+.btn-block {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 48px;
+  margin-top: 6px;
+}
+
+#status {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.err { color: #dc2626; }
+.ok { color: #16a34a; }
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 3px solid #cbd5e1;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.hidden { display: none; }
+
+.table-scroll-wrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.table-scroll {
+  overflow: auto;
+  background: #fff;
+}
+
+@media (max-width: 860px) {
+  .page-wrap { padding: 0 12px; }
+  .binder { height: 95vh; }
+  .app-main { padding: 20px 18px 22px; }
+  .controls { grid-template-columns: 1fr; }
+  .folder-tabs { padding-left: 8px; gap: 4px; }
+  .folder-tabs a { padding: 8px 16px 7px; font-size: 12px; }
+  .folder-tabs a.active { padding: 6px 16px 9px; }
+}

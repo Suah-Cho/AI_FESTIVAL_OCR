@@ -5,6 +5,16 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class CellEdit(BaseModel):
+    row: int
+    col: int
+    value: str = ""
+
+
+class CellEditsRequest(BaseModel):
+    edits: list[CellEdit] = Field(default_factory=list)
+
+
 class VerifyResult(BaseModel):
     """검증 결과 요약 + 생성된 결과 엑셀 경로."""
 

@@ -27,6 +27,7 @@ from fastapi.responses import (
 )
 
 from app.core.config import STATIC_DIR, TEMPLATES_DIR, get_settings
+from app.schemas.verification import CellEditsRequest
 from app.services import session_service as ss
 from app.services import verification_service as vs
 from app.services.verification_service import VerificationError, verify_uploads
@@ -192,6 +193,24 @@ async def verify_stream(session_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.patch("/api/session/{session_id}/cells", tags=["verify"])
+def patch_cells(session_id: str, body: CellEditsRequest):
+    """화면에서 수정한 셀 값을 세션 워크북에 반영한다."""
+    session = ss.store.get(session_id)
+    if session is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "세션을 찾을 수 없습니다. 파일을 다시 업로드해 주세요."},
+        )
+    if not body.edits:
+        return JSONResponse({"updated": 0})
+
+    edits = [e.model_dump() for e in body.edits]
+    with session.lock:
+        vs.apply_cell_edits(session.prepared, edits)
+    return JSONResponse({"updated": len(edits)})
 
 
 @router.get("/api/download/{session_id}", tags=["verify"])

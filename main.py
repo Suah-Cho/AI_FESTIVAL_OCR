@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import STATIC_DIR
 from app.core.logging_config import setup_logging
-from app.routers import verification
+from app.routers import extraction, verification
 
 
 def create_app() -> FastAPI:
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(verification.router)
+    app.include_router(extraction.router)
     return app
 
 

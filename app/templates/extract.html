@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>서류 정보 추출</title>
+  <link rel="icon" href="/static/favicon.png" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2302227a'/%3E%3Cpath%20d='M17%2033l10%2010%2020-22'%20fill='none'%20stroke='%23ffffff'%20stroke-width='7'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <style>
+    .presets { display:flex; flex-wrap:wrap; gap:8px; margin-top:4px; }
+    .preset-btn {
+      border:1px solid var(--border); background:#fff; color:var(--accent);
+      border-radius:999px; padding:6px 12px; font-size:12px; font-weight:600; cursor:pointer;
+    }
+    .preset-btn:hover { background:#eef2ff; border-color:var(--accent); }
+    .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .progress-wrap { flex:1; min-width:200px; }
+    .progress-bar { height:10px; background:#eef2f7; border:1px solid var(--border); border-radius:999px; overflow:hidden; }
+    .progress-fill { height:100%; width:0%; background:linear-gradient(90deg,#02227a,#16a34a); transition:width .3s; }
+    .progress-text { font-size:12px; color:var(--muted); margin-top:6px; }
+    .table-scroll { overflow:auto; }
+    table.sheet { border-collapse:collapse; font-size:12px; white-space:nowrap; background:#fff; }
+    table.sheet th.rownum, table.sheet td.rownum { position:sticky; left:0; z-index:2; background:#f1f5f9; color:var(--muted); text-align:center; min-width:42px; font-weight:600; }
+    table.sheet td, table.sheet th { border:1px solid var(--border); padding:5px 8px; max-width:180px; overflow:hidden; text-overflow:ellipsis; line-height:1.35; }
+    table.sheet tr.headerRow td { background:#eef2ff; font-weight:700; color:#1e293b; position:sticky; top:0; z-index:1; }
+    table.sheet td.colhdr-target { background:var(--accent) !important; color:#fff !important; padding:5px 8px; vertical-align:top; }
+    .colhdr-wrap { display:flex; flex-direction:column; gap:4px; align-items:flex-start; min-width:0; }
+    .colhdr-name { font-size:12px; font-weight:700; line-height:1.25; white-space:normal; }
+    .colhdr-fmt {
+      display:block; max-width:100%; border:none; border-radius:4px; padding:2px 6px;
+      font-size:10px; font-weight:600; line-height:1.3; cursor:pointer; color:#fff;
+      background:rgba(255,255,255,.18); font-family:ui-monospace, Consolas, monospace;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .colhdr-fmt.empty { font-family:'Segoe UI', system-ui, sans-serif; font-style:normal; opacity:.75; }
+    .colhdr-fmt:hover:not(:disabled) { background:rgba(255,255,255,.32); filter:none; }
+    .colhdr-fmt:disabled { opacity:.5; cursor:not-allowed; }
+    .table-toolbar {
+      display:flex; align-items:flex-start; gap:10px;
+      margin-bottom:8px; flex-wrap:wrap;
+    }
+    .table-toolbar-label { font-size:13px; font-weight:700; color:var(--text); }
+    .table-toolbar-hint { font-size:11px; color:var(--muted); margin-top:2px; }
+    table.sheet td.target { box-shadow:inset 0 0 0 1px rgba(2,34,122,.35); }
+    .modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:20px; }
+    .modal.hidden { display:none; }
+    .modal-backdrop { position:absolute; inset:0; background:rgba(15,23,42,.45); }
+    .modal-card {
+      position:relative; width:min(480px, 100%); max-height:min(80vh, 560px);
+      background:#fff; border-radius:14px; box-shadow:0 20px 50px rgba(15,23,42,.2);
+      display:flex; flex-direction:column; overflow:hidden;
+    }
+    .modal-head { display:flex; align-items:center; justify-content:space-between; padding:16px 18px 8px; }
+    .modal-head h2 { margin:0; font-size:16px; color:var(--text); }
+    .modal-close {
+      width:32px; height:32px; border:none; background:#f1f5f9; border-radius:8px;
+      font-size:20px; line-height:1; color:var(--muted); cursor:pointer;
+    }
+    .modal-close:hover { background:#e2e8f0; filter:none; }
+    .modal-desc { margin:0; padding:0 18px 12px; font-size:12px; color:var(--muted); line-height:1.5; }
+    .modal-body { padding:0 18px; overflow:auto; flex:1; }
+    .fmt-item { padding:12px 0; border-top:1px solid var(--border); }
+    .fmt-item:first-child { border-top:none; padding-top:4px; }
+    .fmt-label { font-size:13px; font-weight:700; color:var(--text); margin-bottom:8px; }
+    .fmt-input {
+      width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px;
+      font:500 12px/1.4 ui-monospace, Consolas, monospace; color:var(--text); background:#fff;
+    }
+    .fmt-input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(2,34,122,.1); }
+    .fmt-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .fmt-chip {
+      border:1px solid var(--border); background:#f8fafc; color:var(--accent);
+      border-radius:999px; padding:4px 10px; font-size:11px; font-weight:600; cursor:pointer;
+    }
+    .fmt-chip:hover { background:#eef2ff; border-color:var(--accent); filter:none; }
+    .modal-foot { display:flex; justify-content:flex-end; gap:8px; padding:14px 18px 16px; border-top:1px solid var(--border); }
+    .modal-foot .btn-muted { background:#f1f5f9; color:var(--text); border:1px solid var(--border); }
+    .modal-foot .btn-muted:hover { background:#e2e8f0; filter:none; }
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="binder">
+      <nav class="folder-tabs" aria-label="페이지 선택">
+        <a href="/">서류 검증</a>
+        <a href="/extract" class="active">정보 추출</a>
+      </nav>
+      <div class="app-shell">
+        <main class="app-main">
+        <h1>서류 정보 추출</h1>
+        <p class="desc">서류 ZIP을 올리고 추출할 항목을 입력하면 미리보기 표가 표시됩니다.
+        파란 열 아래 「형식 지정」으로 출력 형식을 설정한 뒤 [추출 시작]을 누르세요.</p>
+
+        <div class="panel">
+          <form id="uploadForm" class="controls">
+            <div class="field full">
+              <label for="file">1. 서류 ZIP 업로드</label>
+              <input type="file" name="file" id="file" accept=".zip" required />
+              <small>검증과 같이 <code>{폴더}/{번호}/</code> 구조의 ZIP을 올리면 폴더마다 한 행씩 추출합니다.</small>
+            </div>
+            <div class="field full">
+              <label for="target_fields">2. 추출할 항목 (쉼표로 구분)</label>
+              <input type="text" name="target_fields" id="target_fields"
+                     placeholder="예: 대표자 전화번호, 대표 전화번호, 개업연월일" required />
+              <small>엑셀 헤더에 들어갈 이름 그대로 입력하세요.</small>
+              <div class="presets" id="presetsHost"></div>
+            </div>
+            <input type="hidden" name="doc_type" id="doc_type" value="" />
+            <button type="submit" class="btn-primary btn-block" id="uploadBtn">업로드</button>
+          </form>
+        </div>
+
+        <div class="panel hidden" id="runPanel">
+          <div class="actions">
+            <button type="button" class="btn-go" id="startBtn">추출 시작</button>
+            <button type="button" class="btn-download" id="downloadBtn" disabled>결과 엑셀 다운로드</button>
+            <div class="progress-wrap">
+              <div class="progress-bar"><div class="progress-fill" id="progFill"></div></div>
+              <div class="progress-text" id="progText">대기 중</div>
+            </div>
+          </div>
+          <div id="status" style="margin-top:10px;"></div>
+        </div>
+
+        <div class="panel hidden" id="tablePanel">
+          <div class="table-toolbar">
+            <div>
+              <div class="table-toolbar-label">추출 미리보기</div>
+              <div class="table-toolbar-hint">파란 열 아래 「형식 지정」을 눌러 출력 형식을 설정하세요</div>
+            </div>
+          </div>
+          <div class="table-scroll-wrap">
+            <div class="table-scroll"><div id="tableHost"></div></div>
+          </div>
+        </div>
+
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div id="formatModal" class="modal hidden" role="dialog" aria-labelledby="formatModalTitle" aria-modal="true">
+    <div class="modal-backdrop" id="formatModalBackdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="formatModalTitle">출력 형식 지정</h2>
+        <button type="button" class="modal-close" id="formatModalClose" aria-label="닫기">×</button>
+      </div>
+      <p class="modal-desc" id="formatModalDesc">비워 두면 서류에 적힌 그대로 추출합니다.</p>
+      <div class="modal-body" id="formatModalList"></div>
+      <div class="modal-foot">
+        <button type="button" class="btn-muted" id="formatModalCancel">취소</button>
+        <button type="button" class="btn-go" id="formatModalApply">적용</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const els = {
+      uploadForm: document.getElementById('uploadForm'),
+      uploadBtn: document.getElementById('uploadBtn'),
+      targetFields: document.getElementById('target_fields'),
+      docType: document.getElementById('doc_type'),
+      presetsHost: document.getElementById('presetsHost'),
+      runPanel: document.getElementById('runPanel'),
+      tablePanel: document.getElementById('tablePanel'),
+      tableHost: document.getElementById('tableHost'),
+      startBtn: document.getElementById('startBtn'),
+      formatModal: document.getElementById('formatModal'),
+      formatModalTitle: document.getElementById('formatModalTitle'),
+      formatModalDesc: document.getElementById('formatModalDesc'),
+      formatModalList: document.getElementById('formatModalList'),
+      formatModalBackdrop: document.getElementById('formatModalBackdrop'),
+      formatModalClose: document.getElementById('formatModalClose'),
+      formatModalCancel: document.getElementById('formatModalCancel'),
+      formatModalApply: document.getElementById('formatModalApply'),
+      downloadBtn: document.getElementById('downloadBtn'),
+      progFill: document.getElementById('progFill'),
+      progText: document.getElementById('progText'),
+      status: document.getElementById('status'),
+    };
+
+    let state = { sessionId: null, meta: null, doneCount: 0, total: 0, es: null, fieldFormats: {}, editingField: null };
+
+    const FORMAT_CHIPS = {
+      phone: ['000-0000-0000', '000-000-0000', '010-0000-0000'],
+      date: ['YYYY-MM-DD', 'YYYY.MM.DD', 'YYYYMMDD'],
+      rrn: ['000000-0000000'],
+      biz: ['000-00-00000'],
+    };
+
+    function cellId(row, col) { return `c-${row}-${col}`; }
+
+    function chipsForField(name, suggestion) {
+      if (/전화/.test(name)) return FORMAT_CHIPS.phone;
+      if (/주민/.test(name)) return FORMAT_CHIPS.rrn;
+      if (/사업자/.test(name) && /번호/.test(name)) return FORMAT_CHIPS.biz;
+      if (/생년월일|연월일|개업|일자|날짜/.test(name)) return FORMAT_CHIPS.date;
+      if (suggestion) return [suggestion];
+      return [];
+    }
+
+    function updateHeaderFormatTags() {
+      els.tableHost.querySelectorAll('.colhdr-fmt[data-field]').forEach((btn) => {
+        const name = btn.dataset.field;
+        const fmt = state.fieldFormats[name];
+        btn.textContent = fmt || '형식 지정';
+        btn.classList.toggle('empty', !fmt);
+        btn.title = fmt ? `형식: ${fmt} (클릭하여 수정)` : '출력 형식 지정';
+      });
+    }
+
+    function renderFormatModalList(fieldName) {
+      const meta = state.meta;
+      if (!meta || !fieldName) return;
+      const suggestions = meta.format_suggestions || {};
+      els.formatModalList.innerHTML = '';
+      els.formatModalTitle.textContent = `${fieldName} — 출력 형식`;
+      els.formatModalDesc.textContent = '이 열의 결과 표기 형식을 지정하세요. 비워 두면 서류 표기 그대로 추출합니다.';
+
+      const item = document.createElement('div');
+      item.className = 'fmt-item';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'fmt-input';
+      input.dataset.field = fieldName;
+      input.value = state.fieldFormats[fieldName] || '';
+      input.placeholder = suggestions[fieldName] || '예: 000-0000-0000';
+
+      const chips = document.createElement('div');
+      chips.className = 'fmt-chips';
+      for (const chip of chipsForField(fieldName, suggestions[fieldName])) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'fmt-chip';
+        btn.textContent = chip;
+        btn.addEventListener('click', () => { input.value = chip; input.focus(); });
+        chips.appendChild(btn);
+      }
+
+      item.appendChild(input);
+      if (chips.childElementCount) item.appendChild(chips);
+      els.formatModalList.appendChild(item);
+    }
+
+    function openFormatModal(fieldName) {
+      if (!fieldName) return;
+      state.editingField = fieldName;
+      renderFormatModalList(fieldName);
+      els.formatModal.classList.remove('hidden');
+      const input = els.formatModalList.querySelector('.fmt-input');
+      if (input) input.focus();
+    }
+
+    function closeFormatModal() {
+      els.formatModal.classList.add('hidden');
+      state.editingField = null;
+    }
+
+    function applyFormatModal() {
+      const fieldName = state.editingField;
+      if (!fieldName) return;
+      const input = els.formatModalList.querySelector(`.fmt-input[data-field="${CSS.escape(fieldName)}"]`);
+      if (!input) return;
+      const val = input.value.trim();
+      if (val) state.fieldFormats[fieldName] = val;
+      else delete state.fieldFormats[fieldName];
+      updateHeaderFormatTags();
+      closeFormatModal();
+    }
+
+    function collectFieldFormats() {
+      return state.fieldFormats;
+    }
+
+    function setFormatControlsDisabled(disabled) {
+      els.tableHost.querySelectorAll('.colhdr-fmt').forEach((btn) => { btn.disabled = disabled; });
+    }
+
+    async function saveFieldFormats() {
+      collectFieldFormats();
+      const res = await fetch(`/api/extract/configure/${state.sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field_formats: state.fieldFormats }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ detail: '형식 저장 실패' }));
+        throw new Error(data.detail || res.statusText);
+      }
+      return res.json();
+    }
+
+    function startExtractionStream() {
+      const es = new EventSource(`/api/extract/stream/${state.sessionId}`);
+      state.es = es;
+      es.onmessage = (msg) => {
+        const ev = JSON.parse(msg.data);
+        if (ev.type === 'start') {
+          state.total = ev.total;
+          updateProgress();
+        } else if (ev.type === 'row') {
+          applyRowResult(ev);
+        } else if (ev.type === 'done') {
+          es.close();
+          state.es = null;
+          els.downloadBtn.disabled = false;
+          els.startBtn.disabled = false;
+          setFormatControlsDisabled(false);
+          setStatus('완료! ' + (ev.summary || '') + ' — [결과 엑셀 다운로드]를 누르세요.', 'ok');
+        }
+      };
+      es.onerror = () => {
+        es.close();
+        state.es = null;
+        if (state.doneCount < state.total) {
+          setStatus('스트리밍 연결이 끊겼습니다. 다시 [추출 시작]을 눌러 주세요.', 'err');
+          els.startBtn.disabled = false;
+          setFormatControlsDisabled(false);
+        }
+      };
+    }
+
+    function setStatus(html, cls) {
+      els.status.innerHTML = cls ? `<span class="${cls}">${html}</span>` : html;
+    }
+
+    function renderPresets(docTypes) {
+      els.presetsHost.innerHTML = '';
+      for (const dt of docTypes) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'preset-btn';
+        btn.textContent = dt.label + ' 항목 채우기';
+        btn.addEventListener('click', () => {
+          els.targetFields.value = dt.fields.join(', ');
+          els.docType.value = dt.key;
+        });
+        els.presetsHost.appendChild(btn);
+      }
+    }
+
+    async function loadPresets() {
+      try {
+        const res = await fetch('/api/extract/doc-types');
+        const data = await res.json();
+        renderPresets(data.doc_types || []);
+      } catch {
+        renderPresets([
+          { key: 'business_registration', label: '사업자등록증', fields: ['대표자 전화번호', '대표 전화번호', '개업연월일'] },
+          { key: 'id_card', label: '신분증', fields: ['국적', '성명', '성별', '생년월일', '주소', '주민등록번호'] },
+        ]);
+      }
+    }
+
+    function renderTable(meta) {
+      const targetCols = meta.target_columns;
+      const targetColSet = new Set(Object.values(targetCols));
+      const colToField = Object.fromEntries(
+        Object.entries(targetCols).map(([name, col]) => [String(col), name])
+      );
+      const extractRowSet = new Set(meta.extract_rows);
+
+      const tbl = document.createElement('table');
+      tbl.className = 'sheet';
+      const tbody = document.createElement('tbody');
+
+      for (let i = 0; i < meta.cells.length; i++) {
+        const excelRow = i + 1;
+        const tr = document.createElement('tr');
+        const isHeader = excelRow === meta.header_row;
+        if (isHeader) tr.className = 'headerRow';
+
+        const rn = document.createElement('td');
+        rn.className = 'rownum';
+        rn.textContent = excelRow;
+        rn.id = `rn-${excelRow}`;
+        tr.appendChild(rn);
+
+        const rowVals = meta.cells[i];
+        for (let j = 0; j < rowVals.length; j++) {
+          const excelCol = j + 1;
+          const td = document.createElement('td');
+          td.id = cellId(excelRow, excelCol);
+          const isDataRow = excelRow > meta.header_row;
+          const isTargetCol = targetColSet.has(excelCol);
+
+          if (isHeader && isTargetCol) {
+            const fieldName = colToField[String(excelCol)];
+            td.classList.add('colhdr-target');
+
+            const wrap = document.createElement('div');
+            wrap.className = 'colhdr-wrap';
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'colhdr-name';
+            nameEl.textContent = rowVals[j];
+
+            const fmtBtn = document.createElement('button');
+            fmtBtn.type = 'button';
+            fmtBtn.className = 'colhdr-fmt' + (state.fieldFormats[fieldName] ? '' : ' empty');
+            fmtBtn.dataset.field = fieldName;
+            fmtBtn.textContent = state.fieldFormats[fieldName] || '형식 지정';
+            fmtBtn.title = state.fieldFormats[fieldName]
+              ? `형식: ${state.fieldFormats[fieldName]} (클릭하여 수정)`
+              : '출력 형식 지정';
+            fmtBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              openFormatModal(fieldName);
+            });
+
+            wrap.appendChild(nameEl);
+            wrap.appendChild(fmtBtn);
+            td.appendChild(wrap);
+          } else {
+            const isExtractData = isDataRow && extractRowSet.has(excelRow);
+            if (isExtractData && isTargetCol) {
+              td.textContent = '';
+              td.title = '';
+            } else {
+              td.textContent = rowVals[j];
+              td.title = rowVals[j];
+            }
+          }
+
+          if (isDataRow && isTargetCol) td.classList.add('target');
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      tbl.appendChild(tbody);
+      els.tableHost.innerHTML = '';
+      els.tableHost.appendChild(tbl);
+    }
+
+    function applyRowResult(ev) {
+      const meta = state.meta;
+
+      for (const [name, value] of Object.entries(ev.fields || {})) {
+        const col = meta.target_columns[name];
+        if (!col) continue;
+        const td = document.getElementById(cellId(ev.row_index, col));
+        if (td) {
+          td.textContent = value || '(없음)';
+          td.title = td.textContent;
+        }
+      }
+
+      state.doneCount += 1;
+      updateProgress();
+    }
+
+    function updateProgress() {
+      const pct = state.total ? Math.round((state.doneCount / state.total) * 100) : 0;
+      els.progFill.style.width = pct + '%';
+      els.progText.textContent = `추출 ${state.doneCount} / ${state.total} (${pct}%)`;
+    }
+
+    els.uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      els.uploadBtn.disabled = true;
+      setStatus('<span class="spinner"></span>ZIP을 분석하는 중...');
+      els.runPanel.classList.remove('hidden');
+
+      try {
+        const fd = new FormData(els.uploadForm);
+        const res = await fetch('/api/extract/upload', { method: 'POST', body: fd });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ detail: '알 수 없는 오류' }));
+          setStatus('오류: ' + (data.detail || res.statusText), 'err');
+          return;
+        }
+        const meta = await res.json();
+        state.sessionId = meta.session_id;
+        state.meta = meta;
+        state.doneCount = 0;
+        state.total = meta.extract_rows.length;
+        state.fieldFormats = {};
+
+        renderTable(meta);
+        els.tablePanel.classList.remove('hidden');
+        els.startBtn.disabled = false;
+        els.downloadBtn.disabled = true;
+        updateProgress();
+        setStatus(`미리보기 완료 — 추출 대상 ${state.total}건. 파란 열에서 형식을 지정한 뒤 [추출 시작]을 누르세요.`, 'ok');
+      } catch (err) {
+        setStatus('요청 실패: ' + err, 'err');
+      } finally {
+        els.uploadBtn.disabled = false;
+      }
+    });
+
+    els.startBtn.addEventListener('click', async () => {
+      if (!state.sessionId) return;
+      els.startBtn.disabled = true;
+      els.downloadBtn.disabled = true;
+      state.doneCount = 0;
+      updateProgress();
+      setStatus('<span class="spinner"></span>형식 저장 후 추출을 시작합니다...');
+
+      try {
+        await saveFieldFormats();
+      } catch (err) {
+        setStatus('형식 저장 오류: ' + err.message, 'err');
+        els.startBtn.disabled = false;
+        return;
+      }
+
+      setFormatControlsDisabled(true);
+      closeFormatModal();
+      setStatus('<span class="spinner"></span>추출 중... 각 서류를 병렬로 처리합니다.');
+
+      for (const r of state.meta.extract_rows) {
+        for (const col of Object.values(state.meta.target_columns)) {
+          const td = document.getElementById(cellId(r, col));
+          if (td) { td.textContent = ''; td.className = 'target'; }
+        }
+      }
+
+      startExtractionStream();
+    });
+
+    els.downloadBtn.addEventListener('click', async () => {
+      if (!state.sessionId) return;
+      els.downloadBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/extract/download/${state.sessionId}`);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ detail: '알 수 없는 오류' }));
+          setStatus('다운로드 오류: ' + (data.detail || res.statusText), 'err');
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = state.meta.download_filename || 'extract_result.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        const summary = decodeURIComponent(res.headers.get('X-Extract-Summary') || '');
+        setStatus('결과 엑셀을 다운로드했습니다.' + (summary ? ` (${summary})` : ''), 'ok');
+      } catch (err) {
+        setStatus('다운로드 실패: ' + err, 'err');
+      } finally {
+        els.downloadBtn.disabled = false;
+      }
+    });
+
+    els.formatModalBackdrop.addEventListener('click', closeFormatModal);
+    els.formatModalClose.addEventListener('click', closeFormatModal);
+    els.formatModalCancel.addEventListener('click', closeFormatModal);
+    els.formatModalApply.addEventListener('click', applyFormatModal);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !els.formatModal.classList.contains('hidden')) closeFormatModal();
+    });
+
+    els.targetFields.addEventListener('input', () => {
+      els.docType.value = '';
+    });
+
+    loadPresets();
+  </script>
+</body>
+</html>

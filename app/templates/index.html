@@ -7,88 +7,50 @@
   <!-- 1순위: static 폴더의 이미지 파일. 없으면 아래 인라인 SVG가 사용됨 -->
   <link rel="icon" href="/static/favicon.png" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2302227a'/%3E%3Cpath%20d='M17%2033l10%2010%2020-22'%20fill='none'%20stroke='%23ffffff'%20stroke-width='7'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/app.css" />
   <style>
-    :root {
-      --bg:#eef2f7; --card:#ffffff; --accent:#02227a; --accent-ink:#ffffff;
-      --text:#1e293b; --muted:#64748b; --border:#e2e8f0; --input-bg:#f8fafc;
-      --match-bg:#C6EFCE; --mismatch-bg:#FFC7CE; --check-bg:#FFEB9C; --excluded-bg:#E2E8F0;
-      --cell-ink:#1e293b;
-    }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family:'Segoe UI', system-ui, sans-serif; background:var(--bg); color:var(--text); padding:40px 16px 56px; }
-    .container { width:78%; max-width:1100px; margin:0 auto; }
-    h1 { font-size:24px; margin:0 0 10px; }
-    p.desc { color:var(--muted); margin:0 0 16px; font-size:13px; line-height:1.7; }
-    .legend { margin:0 0 24px; }
-    .legend span { display:inline-block; margin-right:14px; font-size:12px; color:var(--muted); }
-    .dot { display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:middle; margin-right:4px; border:1px solid rgba(0,0,0,.08); }
-
-    .panel { background:var(--card); border-radius:14px; padding:24px; margin-bottom:20px; border:1px solid var(--border); box-shadow:0 4px 16px rgba(15,23,42,.06); }
-
-    /* 업로드 폼: 입력 2개는 한 줄, 버튼은 아래 전체 너비 */
-    .controls { display:grid; grid-template-columns:1fr 1fr; gap:20px 20px; }
-    .field { display:flex; flex-direction:column; gap:8px; }
-    label { font-size:13px; font-weight:600; }
-    input[type=text], input[type=file] { width:100%; height:42px; border-radius:9px; border:1px solid var(--border); background:var(--input-bg); color:var(--text); font-size:13px; }
-    input[type=text] { padding:9px 11px; }
-    input[type=file] { padding:6px 10px; line-height:30px; }
-    input[type=text]:focus, input[type=file]:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(2,34,122,.18); }
-    input[type=file]::file-selector-button { height:30px; background:#e2e8f0; color:#334155; border:1px solid #cbd5e1; padding:0 14px; border-radius:7px; margin-right:10px; cursor:pointer; font-size:13px; }
-    input[type=file]:hover::file-selector-button { background:#cbd5e1; }
-    small { color:var(--muted); font-size:11px; }
-
-    button { border:none; border-radius:9px; padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; transition:opacity .15s, filter .15s; }
-    button:hover:not(:disabled) { filter:brightness(1.05); }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    .btn-primary { background:var(--accent); color:#fff; }
-    .btn-go { background:var(--accent); color:#fff; }
-    .btn-download { background:#fff; color:var(--accent); border:1.5px solid var(--accent); }
-    .btn-download:hover:not(:disabled) { background:#eef2ff; filter:none; }
-    .btn-block { grid-column:1 / -1; width:100%; height:48px; margin-top:6px; }
-
     .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     .progress-wrap { flex:1; min-width:200px; }
     .progress-bar { height:10px; background:#eef2f7; border:1px solid var(--border); border-radius:999px; overflow:hidden; }
     .progress-fill { height:100%; width:0%; background:linear-gradient(90deg,#02227a,#16a34a); transition:width .3s; }
     .progress-text { font-size:12px; color:var(--muted); margin-top:6px; }
-
-    #status { font-size:13px; line-height:1.6; }
-    .err { color:#dc2626; } .ok { color:#16a34a; }
-    .spinner { display:inline-block; width:14px; height:14px; border:3px solid #cbd5e1; border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle; margin-right:6px; }
-    @keyframes spin { to { transform:rotate(360deg); } }
-
-    .table-scroll { overflow:auto; max-height:62vh; border:1px solid var(--border); border-radius:12px; }
-    table.sheet { border-collapse:collapse; font-size:12px; white-space:nowrap; background:var(--card); }
+    .table-scroll { overflow:auto; }
+    table.sheet { border-collapse:collapse; font-size:12px; white-space:nowrap; background:#fff; }
     table.sheet th.rownum, table.sheet td.rownum { position:sticky; left:0; z-index:2; background:#f1f5f9; color:var(--muted); text-align:center; min-width:42px; font-weight:600; }
     table.sheet td, table.sheet th { border:1px solid var(--border); padding:6px 10px; max-width:280px; overflow:hidden; text-overflow:ellipsis; }
     table.sheet tr.headerRow td { background:#eef2ff; font-weight:700; color:#1e293b; position:sticky; top:0; z-index:1; }
     table.sheet td.target { box-shadow:inset 0 0 0 1px rgba(2,34,122,.35); }
     table.sheet td.colhdr-target { background:var(--accent) !important; color:#fff !important; }
-    /* 판정 색상 (엑셀과 동일) */
     td.st-pending { color:var(--accent) !important; font-style:italic; }
-    td.st-match    { background:var(--match-bg)    !important; color:var(--cell-ink) !important; }
     td.st-mismatch { background:var(--mismatch-bg) !important; color:var(--cell-ink) !important; }
     td.st-check    { background:var(--check-bg)    !important; color:var(--cell-ink) !important; }
     td.st-excluded { background:var(--excluded-bg) !important; color:var(--cell-ink) !important; }
+    td.editable { cursor:text; }
+    td.editable:hover { box-shadow:inset 0 0 0 1px rgba(2,34,122,.25); }
+    td.editable:focus { outline:2px solid var(--accent); outline-offset:-2px; background:#fff !important; }
+    td.st-edited { background:#fff !important; color:var(--cell-ink) !important; }
     tr.row-active td.rownum { background:var(--accent); color:#fff; }
-    .hidden { display:none; }
-
-    @media (max-width:860px) {
-      .container { width:94%; }
-      .controls { grid-template-columns:1fr; }
-    }
+    .legend-note { color:var(--muted); font-size:12px; margin-left:8px; }
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="page-wrap">
+    <div class="binder">
+      <nav class="folder-tabs" aria-label="페이지 선택">
+        <a href="/" class="active">서류 검증</a>
+        <a href="/extract">정보 추출</a>
+      </nav>
+      <div class="app-shell">
+        <main class="app-main">
     <h1>계약 서류 자동 검증</h1>
     <p class="desc">엑셀(.xlsx)과 서류 ZIP을 올리면 표가 그대로 화면에 표시됩니다. [검증 시작]을 누르면
-    각 행을 병렬로 LLM에 보내 대조하고, 결과가 실시간으로 표에 색으로 반영됩니다. 끝나면 결과 엑셀을 내려받을 수 있어요.</p>
+    각 행을 병렬로 LLM에 보내 대조하고, 문제가 있는 셀만 색으로 표시됩니다. 표에서 값을 직접 수정한 뒤
+    [결과 엑셀 다운로드]로 저장할 수 있어요.</p>
     <div class="legend">
-      <span><i class="dot" style="background:var(--match-bg)"></i>일치</span>
       <span><i class="dot" style="background:var(--mismatch-bg)"></i>불일치</span>
       <span><i class="dot" style="background:var(--check-bg)"></i>확인필요</span>
       <span><i class="dot" style="background:var(--excluded-bg)"></i>제외</span>
+      <span class="legend-note">일치한 셀은 색 없음 · 셀 클릭 후 수정 가능</span>
     </div>
 
     <!-- 1단계: 업로드 -->
@@ -124,13 +86,17 @@
 
     <!-- 3단계: 엑셀 표 -->
     <div class="panel hidden" id="tablePanel">
-      <div class="table-scroll"><div id="tableHost"></div></div>
+      <div class="table-scroll-wrap">
+        <div class="table-scroll"><div id="tableHost"></div></div>
+      </div>
+    </div>
+      </main>
+      </div>
     </div>
   </div>
 
   <script>
     const STATUS_CLASS = {
-      "일치": "st-match",
       "불일치": "st-mismatch",
       "확인필요": "st-check",
       "제외": "st-excluded",
@@ -152,6 +118,50 @@
     let state = { sessionId: null, meta: null, doneCount: 0, total: 0, es: null };
 
     function cellId(row, col) { return `c-${row}-${col}`; }
+
+    function bindEditableCell(td, excelRow, excelCol, meta) {
+      const isDataRow = excelRow > meta.header_row;
+      const isResultCol = excelCol === meta.result_col;
+      if (!isDataRow || isResultCol) return;
+
+      td.classList.add('editable');
+      td.contentEditable = 'true';
+      td.spellcheck = false;
+      td.dataset.row = excelRow;
+      td.dataset.col = excelCol;
+
+      td.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); td.blur(); }
+      });
+      td.addEventListener('blur', () => {
+        const text = td.textContent.trim();
+        td.textContent = text;
+        td.title = text;
+        if (td.classList.contains('st-mismatch') || td.classList.contains('st-check')) {
+          td.classList.remove('st-mismatch', 'st-check', 'st-excluded');
+          td.classList.add('st-edited');
+        }
+      });
+    }
+
+    function collectCellEdits() {
+      const meta = state.meta;
+      const edits = [];
+      for (let i = meta.header_row; i < meta.cells.length; i++) {
+        const excelRow = i + 1;
+        for (let j = 0; j < meta.cells[i].length; j++) {
+          const excelCol = j + 1;
+          if (excelCol === meta.result_col) continue;
+          const td = document.getElementById(cellId(excelRow, excelCol));
+          if (!td) continue;
+          const value = td.textContent.trim();
+          if (value !== meta.cells[i][j]) {
+            edits.push({ row: excelRow, col: excelCol, value });
+          }
+        }
+      }
+      return edits;
+    }
 
     function renderTable(meta) {
       const targetCols = meta.target_columns;       // {name: colIndex}
@@ -189,6 +199,7 @@
             td.textContent = '대기';
             td.classList.add('st-pending');
           }
+          bindEditableCell(td, excelRow, excelCol, meta);
           tr.appendChild(td);
         }
         tbody.appendChild(tr);
@@ -207,7 +218,9 @@
         const td = document.getElementById(cellId(ev.row_index, col));
         if (td) {
           td.classList.remove('st-pending');
-          td.classList.add(STATUS_CLASS[status] || 'st-check');
+          if (status !== '일치') {
+            td.classList.add(STATUS_CLASS[status] || 'st-check');
+          }
         }
       }
       // 결과열 기록
@@ -316,6 +329,22 @@
       if (!state.sessionId) return;
       els.downloadBtn.disabled = true;
       try {
+        const edits = collectCellEdits();
+        if (edits.length) {
+          const patchRes = await fetch(`/api/session/${state.sessionId}/cells`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ edits }),
+          });
+          if (!patchRes.ok) {
+            const data = await patchRes.json().catch(() => ({ detail: '알 수 없는 오류' }));
+            setStatus('수정 반영 오류: ' + (data.detail || patchRes.statusText), 'err');
+            return;
+          }
+          for (const edit of edits) {
+            state.meta.cells[edit.row - 1][edit.col - 1] = edit.value;
+          }
+        }
         const res = await fetch(`/api/download/${state.sessionId}`);
         if (!res.ok) {
           const data = await res.json().catch(() => ({ detail: '알 수 없는 오류' }));

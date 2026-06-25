@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 import mimetypes
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,11 +72,17 @@ def _encode_image(path: Path) -> Optional[dict]:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
 
 
-def _build_prompt(field_names: list[str], extra_text: str = "") -> str:
+def _build_prompt(
+    field_names: list[str], *, doc_hint: str = "", extra_text: str = ""
+) -> str:
     fields_str = ", ".join(field_names)
     keys_example = ", ".join(f'"{n}": "..."' for n in field_names)
     prompt = (
         "너는 한국 계약/거래처 서류(사업자등록증, 신분증 등)에서 정보를 추출하는 OCR 도우미야.\n"
+    )
+    if doc_hint:
+        prompt += f"{doc_hint.strip()}\n"
+    prompt += (
         f"첨부된 이미지들에서 다음 항목의 값을 찾아줘: {fields_str}\n\n"
         "규칙:\n"
         "- 반드시 JSON 객체 하나만 출력해.\n"
@@ -94,11 +101,15 @@ def _build_prompt(field_names: list[str], extra_text: str = "") -> str:
     return prompt
 
 
-def _build_vaiv_system_prompt(field_names: list[str]) -> str:
+def _build_vaiv_system_prompt(field_names: list[str], *, doc_hint: str = "") -> str:
     fields_str = ", ".join(field_names)
     keys_example = ", ".join(f'"{n}": "..."' for n in field_names)
-    return (
+    prompt = (
         "당신은 한국 계약/거래처 서류(사업자등록증, 신분증 등) OCR 및 정보 추출 전문가입니다.\n"
+    )
+    if doc_hint:
+        prompt += f"{doc_hint.strip()}\n"
+    prompt += (
         "지침:\n"
         "- 번역하지 마십시오.\n"
         "- 추측하지 마십시오.\n"
@@ -107,6 +118,7 @@ def _build_vaiv_system_prompt(field_names: list[str]) -> str:
         '- 값을 찾을 수 없으면 빈 문자열("")로 두십시오.\n'
         f"- JSON 키는 정확히 다음과 같아야 합니다: {fields_str}\n"
     )
+    return prompt
 
 
 def _build_vaiv_user_prompt(field_names: list[str]) -> str:
@@ -151,14 +163,21 @@ def _dummy_extract(folder_path: str, field_names: list[str]) -> dict:
 # 어댑터 1: OpenAI 호환 비전 API (gpt-4o / gemini / openrouter / 로컬 vLLM 등)
 # ---------------------------------------------------------------------------
 def _extract_openai(
-    spec: OcrModelSpec, folder_path: str, field_names: list[str], temperature: float
+    spec: OcrModelSpec,
+    folder_path: str,
+    field_names: list[str],
+    temperature: float,
+    *,
+    doc_hint: str = "",
 ) -> dict:
     """OpenAI 호환 비전 모델로 폴더 안 서류에서 값을 추출한다."""
     image_files = _list_image_files(folder_path)
     if not image_files:
         return {name: "" for name in field_names}
 
-    content: list[dict] = [{"type": "text", "text": _build_prompt(field_names)}]
+    content: list[dict] = [
+        {"type": "text", "text": _build_prompt(field_names, doc_hint=doc_hint)}
+    ]
     for img in image_files:
         encoded = _encode_image(img)
         if encoded:
@@ -180,7 +199,12 @@ def _extract_openai(
 # 어댑터 3: VAIV /api/chat (prod 운영 OCR, 모델명만 슬롯마다 다름)
 # ---------------------------------------------------------------------------
 def _extract_vaiv(
-    spec: OcrModelSpec, folder_path: str, field_names: list[str], temperature: float
+    spec: OcrModelSpec,
+    folder_path: str,
+    field_names: list[str],
+    temperature: float,
+    *,
+    doc_hint: str = "",
 ) -> dict:
     """VAIV /api/chat API로 폴더 안 서류에서 값을 추출한다."""
     settings = get_settings()
@@ -193,7 +217,7 @@ def _extract_vaiv(
     try:
         data = vaiv_chat_json(
             spec,
-            system_prompt=_build_vaiv_system_prompt(field_names),
+            system_prompt=_build_vaiv_system_prompt(field_names, doc_hint=doc_hint),
             user_prompt=_build_vaiv_user_prompt(field_names),
             images_b64=images_b64,
             temperature=temperature,
@@ -245,7 +269,12 @@ def _clova_raw_text(spec: OcrModelSpec, folder_path: str) -> str:
 
 
 def _extract_clova(
-    spec: OcrModelSpec, folder_path: str, field_names: list[str], temperature: float
+    spec: OcrModelSpec,
+    folder_path: str,
+    field_names: list[str],
+    temperature: float,
+    *,
+    doc_hint: str = "",
 ) -> dict:
     """전용 OCR 원문을 OpenAI에 함께 넣어 필드를 구조화 추출한다.
 
@@ -263,7 +292,10 @@ def _extract_clova(
         ) from exc
 
     content: list[dict] = [
-        {"type": "text", "text": _build_prompt(field_names, extra_text=raw_text)}
+        {
+            "type": "text",
+            "text": _build_prompt(field_names, doc_hint=doc_hint, extra_text=raw_text),
+        }
     ]
     for img in image_files:
         encoded = _encode_image(img)
@@ -308,6 +340,99 @@ def _slot_label(spec: OcrModelSpec, sample_index: int) -> str:
     return f"OCR_MODEL_{spec.index}[{spec.type}/{spec.model}]#{sample_index + 1}"
 
 
+_KOR_SIDO_PREFIXES = (
+    "서울",
+    "부산",
+    "대구",
+    "인천",
+    "광주",
+    "대전",
+    "울산",
+    "세종",
+    "경기",
+    "강원",
+    "충북",
+    "충남",
+    "전북",
+    "전남",
+    "경북",
+    "경남",
+    "제주",
+)
+_RE_KOR_RRN = re.compile(r"\d{6}-?(\d)")
+
+
+def _address_field_value(fields: dict) -> str:
+    for key in ("주소", "자택 주소", "자택주소", "거주지"):
+        val = str(fields.get(key, "") or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _looks_like_korean_address(address: str) -> bool:
+    text = address.strip()
+    if not text:
+        return False
+    return any(prefix in text for prefix in _KOR_SIDO_PREFIXES)
+
+
+def _rrn_field_value(fields: dict) -> str:
+    return str(fields.get("주민등록번호", "") or fields.get("주민번호", "") or "").strip()
+
+
+def _rrn_seventh_digit(rrn: str) -> str | None:
+    cleaned = re.sub(r"\s", "", rrn)
+    m = _RE_KOR_RRN.search(cleaned)
+    return m.group(1) if m else None
+
+
+def _gender_from_rrn_seventh(digit: str) -> str | None:
+    """주민번호 7번째 자리: 홀수=남, 짝수=여."""
+    if digit in "13579":
+        return "남"
+    if digit in "02468":
+        return "여"
+    return None
+
+
+def _infer_nationality(fields: dict) -> None:
+    """국적이 비어 있을 때 국내 주소·내국인 주민번호로 '대한민국'을 보정한다."""
+    if str(fields.get("국적", "") or "").strip():
+        return
+
+    seventh = _rrn_seventh_digit(_rrn_field_value(fields))
+    if seventh in {"5", "6", "7", "8"}:
+        return
+
+    if seventh in {"1", "2", "3", "4", "9", "0"}:
+        fields["국적"] = "대한민국"
+        return
+
+    if _looks_like_korean_address(_address_field_value(fields)):
+        fields["국적"] = "대한민국"
+
+
+def _infer_gender(fields: dict) -> None:
+    """성별이 비어 있을 때 주민등록번호 7번째 자리로 남/여를 보정한다."""
+    if str(fields.get("성별", "") or "").strip():
+        return
+    seventh = _rrn_seventh_digit(_rrn_field_value(fields))
+    if not seventh:
+        return
+    gender = _gender_from_rrn_seventh(seventh)
+    if gender:
+        fields["성별"] = gender
+
+
+def _apply_field_inferences(fields: dict, field_names: list[str]) -> dict:
+    if "국적" in field_names:
+        _infer_nationality(fields)
+    if "성별" in field_names:
+        _infer_gender(fields)
+    return fields
+
+
 def _merge_candidates(candidates: list[_Candidate], field_names: list[str]) -> dict:
     """여러 추출 결과를 필드별 다수결로 병합한다."""
     merged: dict = {}
@@ -344,7 +469,9 @@ def _merge_candidates(candidates: list[_Candidate], field_names: list[str]) -> d
     return merged
 
 
-def _real_extract(folder_path: str, field_names: list[str]) -> dict:
+def _real_extract(
+    folder_path: str, field_names: list[str], *, doc_hint: str = ""
+) -> dict:
     """설정된 모델 슬롯들을 (반복 호출 포함) 돌려 다수결로 합친 결과를 반환한다."""
     settings = get_settings()
     samples = settings.ocr_samples_per_model
@@ -379,7 +506,9 @@ def _real_extract(folder_path: str, field_names: list[str]) -> dict:
             )
             started = time.perf_counter()
             try:
-                result = adapter(spec, folder_path, field_names, temperature)
+                result = adapter(
+                    spec, folder_path, field_names, temperature, doc_hint=doc_hint
+                )
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 candidates.append(_Candidate(label=label, data=result))
                 logger.info(
@@ -410,16 +539,24 @@ def _real_extract(folder_path: str, field_names: list[str]) -> dict:
         return {name: "" for name in field_names}
 
     if len(candidates) == 1:
-        logger.info("단일 모델 결과 사용 folder=%s result=%s", folder_path, candidates[0].data)
-        return candidates[0].data
+        result = dict(candidates[0].data)
+        _apply_field_inferences(result, field_names)
+        logger.info("단일 모델 결과 사용 folder=%s result=%s", folder_path, result)
+        return result
 
     logger.info("다수결 병합 시작 folder=%s 후보 %d개", folder_path, len(candidates))
     merged = _merge_candidates(candidates, field_names)
+    _apply_field_inferences(merged, field_names)
     logger.info("추출 완료 folder=%s merged=%s", folder_path, merged)
     return merged
 
 
-def extract_fields_from_documents(folder_path: str, field_names: list[str]) -> dict:
+def extract_fields_from_documents(
+    folder_path: str,
+    field_names: list[str],
+    *,
+    doc_hint: str = "",
+) -> dict:
     """폴더 안 서류에서 지정한 필드 값을 추출한다.
 
     설정된 모델 슬롯(OCR_MODEL_N)들을 돌려 필드별 다수결로 합친다.
@@ -427,6 +564,7 @@ def extract_fields_from_documents(folder_path: str, field_names: list[str]) -> d
     Args:
         folder_path: ``{파일폴더}/{파일번호}`` 경로.
         field_names: 추출할 필드 이름 목록 (사용자 입력 = 검증할 열 이름).
+        doc_hint: 서류 종류별 추가 안내 (정보 추출 페이지 등).
 
     Returns:
         {필드이름: 추출값} 딕셔너리. 못 찾은 값은 빈 문자열.
@@ -435,5 +573,5 @@ def extract_fields_from_documents(folder_path: str, field_names: list[str]) -> d
         return {}
     if get_settings().use_dummy_extractor:
         logger.info("더미 추출기 사용 folder=%s fields=%s", folder_path, field_names)
-        return _dummy_extract(folder_path, field_names)
-    return _real_extract(folder_path, field_names)
+        return _apply_field_inferences(_dummy_extract(folder_path, field_names), field_names)
+    return _real_extract(folder_path, field_names, doc_hint=doc_hint)

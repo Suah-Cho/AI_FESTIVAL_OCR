@@ -103,3 +103,8 @@ def append_result_column(ws: Worksheet, layout: HeaderLayout, title: str = "검�
 
 def fill_cell(ws: Worksheet, row: int, col: int, fill: PatternFill) -> None:
     ws.cell(row=row, column=col).fill = fill
+
+
+def clear_cell_fill(ws: Worksheet, row: int, col: int) -> None:
+    """셀 배경색을 제거한다 (수정 반영 후 다운로드용)."""
+    ws.cell(row=row, column=col).fill = PatternFill()
