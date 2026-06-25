@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# wheelhouse/ 는 scripts/download_wheelhouse.sh 로 미리 받아 둔다 (인터넷 없는 서버용).
+COPY requirements.txt .
+COPY wheelhouse /wheelhouse
+RUN pip install --no-index --find-links=/wheelhouse -r requirements.txt
+
+COPY main.py .
+COPY app ./app
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

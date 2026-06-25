@@ -1,6 +1,13 @@
 services:
   ocr:
-    build: .
+    build:
+      context: .
+      # 인터넷/PyPI 불가 시: DOCKERFILE=Dockerfile.offline (wheelhouse 필요)
+      dockerfile: ${DOCKERFILE:-Dockerfile}
+      network: host
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     ports:
       - "10060:8000"
     env_file:

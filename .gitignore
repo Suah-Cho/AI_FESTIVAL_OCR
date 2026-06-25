@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docker 오프라인 빌드 wheel (git 제외, 서버로 scp)
+wheelhouse/

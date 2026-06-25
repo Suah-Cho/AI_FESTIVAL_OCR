@@ -2,10 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# opencv-python-headless 는 manylinux wheel 에 런타임을 포함해
-# apt 로 Debian 패키지를 받지 않아도 된다 (사내망에서 apt 미러 차단 시 유리).
+# 사내 PyPI 미러 (선택). .env 에 PIP_INDEX_URL / PIP_TRUSTED_HOST 설정 후 build.
+ARG PIP_INDEX_URL
+ARG PIP_TRUSTED_HOST
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN if [ -n "$PIP_INDEX_URL" ]; then pip config set global.index-url "$PIP_INDEX_URL"; fi \
+    && if [ -n "$PIP_TRUSTED_HOST" ]; then pip config set global.trusted-host "$PIP_TRUSTED_HOST"; fi \
+    && pip install --no-cache-dir -r requirements.txt
+
 COPY main.py .
 COPY app ./app
 
