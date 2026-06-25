@@ -2,24 +2,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 빌드 시 프록시 (호스트 .env → compose build.args 로 전달)
+# 빌드 시 프록시 — compose build.args (chatbot_frontend 와 동일 패턴)
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
-ARG http_proxy
-ARG https_proxy
-ARG no_proxy
 
-# 사내 PyPI 미러 (선택)
 ARG PIP_INDEX_URL
 ARG PIP_TRUSTED_HOST
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
     NO_PROXY=${NO_PROXY} \
-    http_proxy=${http_proxy} \
-    https_proxy=${https_proxy} \
-    no_proxy=${no_proxy}
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
 
 COPY requirements.txt .
 RUN if [ -n "$PIP_INDEX_URL" ]; then pip config set global.index-url "$PIP_INDEX_URL"; fi \
