@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from typing import Optional
 
 RRN_INVALID_DISPLAY = "(확인필요)"
@@ -24,7 +25,70 @@ FIELD_GROUPS: dict[str, frozenset[str]] = {
             "주민등록(실명)번호",
         }
     ),
+    "파일폴더": frozenset(
+        {
+            "파일폴더",
+            "폴더명",
+            "폴더",
+            "파일폴더명",
+            "거래처폴더",
+            "그룹폴더",
+            "업체폴더",
+            "매장폴더",
+            "점포폴더",
+            "법인폴더",
+            "그룹명",
+        }
+    ),
+    "파일번호": frozenset(
+        {
+            "파일번호",
+            "검증파일",
+            "파일No",
+            "파일NO",
+            "파일no",
+            "서류번호",
+            "문서번호",
+            "파일ID",
+            "파일id",
+            "일련번호",
+            "관리번호",
+            "케이스번호",
+            "건수번호",
+            "점포코드",
+            "매장코드",
+            "점포번호",
+            "매장번호",
+            "가맹점번호",
+            "가맹점코드",
+        }
+    ),
+    "서류경로": frozenset(
+        {
+            "서류경로",
+            "문서경로",
+            "경로",
+            "폴더경로",
+            "파일경로",
+            "서류폴더경로",
+            "문서폴더경로",
+            "서류위치",
+            "문서위치",
+        }
+    ),
 }
+
+LOCATION_GROUP_NAMES = ("파일폴더", "파일번호", "서류경로")
+
+
+@dataclass(frozen=True)
+class LocationColumnResolution:
+    """서류 폴더를 가리키는 엑셀 열 해석 결과."""
+
+    mode: str  # "two" | "path" | "auto"
+    folder_col: int | None = None
+    file_no_col: int | None = None
+    path_col: int | None = None
 
 
 def normalize_field_name(name: str) -> str:
@@ -51,6 +115,10 @@ def field_aliases(name: str) -> frozenset[str]:
 
 def is_rrn_field(name: str) -> bool:
     return field_canonical(name) == "주민등록번호"
+
+
+def is_birth_date_field(name: str) -> bool:
+    return "생년월일" in str(name).strip()
 
 
 def normalize_rrn_value(value: Optional[str]) -> str:
@@ -98,6 +166,67 @@ def find_column_index(column_index: dict[str, int], name: str) -> Optional[int]:
     return None
 
 
+def all_location_header_names() -> list[str]:
+    """헤더 행 탐색·서류 위치 열 자동 인식용 동의어 목록."""
+    names: list[str] = []
+    for canonical in LOCATION_GROUP_NAMES:
+        names.extend(FIELD_GROUPS[canonical])
+    return names
+
+
+def find_column_for_group(
+    column_index: dict[str, int],
+    raw_headers: dict[int, str],
+    canonical: str,
+) -> Optional[int]:
+    """동의어 그룹(canonical)에 해당하는 열 번호를 찾는다."""
+    for alias in FIELD_GROUPS.get(canonical, frozenset()):
+        col = column_index.get(normalize_field_name(alias))
+        if col is not None:
+            return col
+    for col, raw in raw_headers.items():
+        if field_canonical(raw) == canonical:
+            return col
+    return None
+
+
+def split_doc_path(path: str) -> tuple[str, str]:
+    """``이마트24_2/157`` 형태 경로를 (파일폴더, 파일번호)로 나눈다."""
+    text = path.strip().replace("\\", "/")
+    parts = [p.strip() for p in text.split("/") if p.strip()]
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    if len(parts) == 1:
+        return "", parts[0]
+    return "", ""
+
+
+def resolve_location_columns(
+    column_index: dict[str, int],
+    raw_headers: dict[int, str],
+    folder_hint: str,
+    file_no_hint: str,
+) -> LocationColumnResolution:
+    """서류 위치 열을 동의어·단일 경로·ZIP 자동 매칭 순으로 해석한다."""
+    folder_col = find_column_index(column_index, folder_hint) or find_column_for_group(
+        column_index, raw_headers, "파일폴더"
+    )
+    file_no_col = find_column_index(column_index, file_no_hint) or find_column_for_group(
+        column_index, raw_headers, "파일번호"
+    )
+    path_col = find_column_for_group(column_index, raw_headers, "서류경로")
+
+    if folder_col and file_no_col and folder_col != file_no_col:
+        return LocationColumnResolution(
+            mode="two", folder_col=folder_col, file_no_col=file_no_col
+        )
+    if path_col is not None:
+        return LocationColumnResolution(mode="path", path_col=path_col)
+    if folder_col is not None and file_no_col is None:
+        return LocationColumnResolution(mode="path", path_col=folder_col)
+    return LocationColumnResolution(mode="auto")
+
+
 def get_field_value(fields: dict, name: str) -> str:
     """추출 결과 dict 에서 이름(동의어 키 포함)으로 값을 찾는다."""
     direct = fields.get(name)
@@ -127,6 +256,11 @@ def build_field_alias_hints(field_names: list[str]) -> str:
                 f"- '{name}': 신분증(주민등록증·운전면허증 등)의 **주민등록번호**(실명번호). "
                 "형식은 YYMMDD-XXXXXXX (하이픈 포함 13자리). "
                 "서류에 적힌 그대로 추출하십시오."
+            )
+        elif is_birth_date_field(name):
+            lines.append(
+                f"- '{name}': 생년월일. 신분증에서 먼저 확인하되, "
+                "판독이 어려우면 사업자등록증의 대표자 생년월일 등을 참고하십시오."
             )
     if not lines:
         return ""

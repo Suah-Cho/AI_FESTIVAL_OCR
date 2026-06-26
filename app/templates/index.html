@@ -18,6 +18,16 @@
     table.sheet { border-collapse:collapse; font-size:12px; white-space:nowrap; background:#fff; }
     table.sheet th.rownum, table.sheet td.rownum { position:sticky; left:0; z-index:2; background:#f1f5f9; color:var(--muted); text-align:center; min-width:42px; font-weight:600; }
     table.sheet td, table.sheet th { border:1px solid var(--border); padding:6px 10px; max-width:280px; overflow:hidden; text-overflow:ellipsis; }
+    table.sheet td.col-result {
+      white-space: normal;
+      word-break: break-word;
+      overflow: visible;
+      text-overflow: clip;
+      max-width: 420px;
+      min-width: 140px;
+      line-height: 1.45;
+      vertical-align: top;
+    }
     table.sheet tr.headerRow td { background:#eef2ff; font-weight:700; color:#1e293b; position:sticky; top:0; z-index:1; }
     table.sheet td.target { box-shadow:inset 0 0 0 1px rgba(2,34,122,.35); }
     table.sheet td.colhdr-target { background:var(--accent) !important; color:#fff !important; }
@@ -29,8 +39,61 @@
     td.editable:hover { box-shadow:inset 0 0 0 1px rgba(2,34,122,.25); }
     td.editable:focus { outline:2px solid var(--accent); outline-offset:-2px; background:#fff !important; }
     td.st-edited { background:#fff !important; color:var(--cell-ink) !important; }
+    td.has-verify-detail { cursor:help; }
     tr.row-active td.rownum { background:var(--accent); color:#fff; }
     .legend-note { color:var(--muted); font-size:12px; margin-left:8px; }
+    .optional-block {
+      margin: -4px 0 10px;
+      border: none;
+      background: transparent;
+      grid-column: 1 / -1;
+    }
+    .optional-block summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 2px 0;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+      user-select: none;
+      line-height: 1.4;
+    }
+    .optional-block summary:hover { color: var(--accent); }
+    .optional-block summary::-webkit-details-marker { display: none; }
+    .optional-block summary::before {
+      content: '▸ ';
+      font-size: 10px;
+    }
+    .optional-block[open] summary::before { content: '▾ '; }
+    .optional-block summary .optional-hint {
+      font-weight: 400;
+      font-size: 11px;
+      margin-left: 6px;
+      opacity: 0.9;
+    }
+    .optional-body {
+      padding: 8px 0 2px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .optional-body .field {
+      gap: 4px;
+    }
+    .optional-body label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .optional-body input[type=text] {
+      height: 34px;
+      padding: 6px 9px;
+      font-size: 12px;
+      border-radius: 7px;
+    }
+    @media (max-width: 640px) {
+      .optional-body { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -50,7 +113,7 @@
       <span><i class="dot" style="background:var(--mismatch-bg)"></i>불일치</span>
       <span><i class="dot" style="background:var(--check-bg)"></i>확인필요</span>
       <span><i class="dot" style="background:var(--excluded-bg)"></i>제외</span>
-      <span class="legend-note">일치한 셀은 색 없음 · 셀 클릭 후 수정 가능</span>
+      <span class="legend-note">일치한 셀은 색 없음 · 빨강/노랑 셀에 마우스를 올리면 기준값·서류값 표시</span>
     </div>
 
     <!-- 1단계: 업로드 -->
@@ -65,8 +128,23 @@
           <label for="target_columns">2. 검증할 열 이름 (쉼표로 구분)</label>
           <input type="text" name="target_columns" id="target_columns"
                  placeholder="예: 사업자번호, 상호명, 계약일자" required />
-          <small>엑셀 헤더에 적힌 이름과 동일하게 입력하세요.</small>
+          <small>엑셀 헤더와 같거나 공백만 다른 이름이면 됩니다. 주민번호↔주민등록번호 등 일부 동의어도 인식합니다.</small>
         </div>
+        <details class="optional-block" id="locationColsBlock">
+          <summary>서류 위치 열<span class="optional-hint">선택 · 비우면 자동</span></summary>
+          <div class="optional-body">
+            <div class="field">
+              <label for="folder_col_name">폴더 열</label>
+              <input type="text" name="folder_col_name" id="folder_col_name"
+                     placeholder="파일폴더" />
+            </div>
+            <div class="field">
+              <label for="file_no_col_name">번호 열</label>
+              <input type="text" name="file_no_col_name" id="file_no_col_name"
+                     placeholder="파일번호" />
+            </div>
+          </div>
+        </details>
         <button type="submit" class="btn-primary btn-block" id="uploadBtn">업로드</button>
       </form>
     </div>
@@ -163,6 +241,11 @@
       return edits;
     }
 
+    function formatResultDisplay(text) {
+      if (!text || text === 'OK') return text || '';
+      return String(text).split(/\s*\|\s*/).join('\n');
+    }
+
     function renderTable(meta) {
       const targetCols = meta.target_columns;       // {name: colIndex}
       const targetColSet = new Set(Object.values(targetCols));
@@ -189,6 +272,7 @@
           const excelCol = j + 1;
           const td = document.createElement('td');
           td.id = cellId(excelRow, excelCol);
+          if (excelCol === meta.result_col) td.classList.add('col-result');
           td.textContent = rowVals[j];
           td.title = rowVals[j];
           const isDataRow = excelRow > meta.header_row;
@@ -209,6 +293,24 @@
       els.tableHost.appendChild(tbl);
     }
 
+    function buildCellDetailTitle(name, status, expected, extracted) {
+      const exp = (expected || '').trim() || '(없음)';
+      const ext = (extracted || '').trim() || '(없음)';
+      if (status === '불일치') {
+        return `기준(엑셀): ${exp}\n서류(추출): ${ext}\n→ 서류에서 읽은 값이 기준과 다릅니다.`;
+      }
+      if (status === '확인필요') {
+        if (!extracted || !extracted.trim()) {
+          return `기준(엑셀): ${exp}\n서류에서 값을 찾지 못했습니다. 수동 확인이 필요합니다.`;
+        }
+        return `기준(엑셀): ${exp}\n서류(추출): ${ext}\n→ 형식·내용 확인이 필요합니다.`;
+      }
+      if (status === '제외') {
+        return '이 행은 검증 대상에서 제외되었습니다.';
+      }
+      return '';
+    }
+
     function applyRowResult(ev) {
       const meta = state.meta;
       // 대상 셀 색칠
@@ -217,9 +319,19 @@
         if (!col) continue;
         const td = document.getElementById(cellId(ev.row_index, col));
         if (td) {
-          td.classList.remove('st-pending');
+          td.classList.remove('st-pending', 'has-verify-detail');
           if (status !== '일치') {
             td.classList.add(STATUS_CLASS[status] || 'st-check');
+            const detail = buildCellDetailTitle(
+              name,
+              status,
+              ev.expected?.[name],
+              ev.extracted?.[name],
+            );
+            if (detail) {
+              td.title = detail;
+              td.classList.add('has-verify-detail');
+            }
           }
         }
       }
@@ -227,8 +339,11 @@
       const rcell = document.getElementById(cellId(ev.row_index, meta.result_col));
       if (rcell) {
         rcell.classList.remove('st-pending');
-        rcell.textContent = ev.result_text;
-        rcell.title = ev.result_text;
+        rcell.textContent = formatResultDisplay(ev.result_text);
+        rcell.title = ev.result_text || '';
+        if (ev.result_text && ev.result_text !== 'OK') {
+          rcell.classList.add('has-verify-detail');
+        }
       }
       const rn = document.getElementById(`rn-${ev.row_index}`);
       if (rn) rn.parentElement.classList.remove('row-active');

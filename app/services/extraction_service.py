@@ -29,6 +29,7 @@ from app.services.document_routing import (
     DOC_TYPE_CONTACT,
     DOC_TYPE_FALLBACK,
     DOC_TYPE_ID,
+    BIRTH_DATE_FIELD_HINT,
     doc_hint_for_group,
     group_fields_by_doc_type,
     group_files_by_doc_type,
@@ -36,6 +37,7 @@ from app.services.document_routing import (
     resolve_files_for_group,
     should_split_extraction,
 )
+from app.services.field_aliases import is_birth_date_field
 from app.services.field_aliases import build_field_alias_hints, get_field_value, is_valid_rrn_format
 from app.services.image_preprocess import read_image_jpeg_bytes
 from app.services.normalization import normalize_value
@@ -640,6 +642,30 @@ def _split_extract(
         for name, value in partial.items():
             if value:
                 merged[name] = value
+
+    birth_fields = [
+        name for name in field_names if is_birth_date_field(name) and not merged.get(name)
+    ]
+    if birth_fields:
+        biz_paths = resolve_files_for_group(DOC_TYPE_BUSINESS, file_groups, all_images)
+        if biz_paths:
+            hint = "\n".join(
+                part
+                for part in [
+                    doc_hint_for_group(DOC_TYPE_BUSINESS, doc_hint),
+                    BIRTH_DATE_FIELD_HINT,
+                ]
+                if part
+            )
+            partial = _real_extract(
+                folder_path,
+                birth_fields,
+                doc_hint=hint,
+                only_files=biz_paths,
+            )
+            for name, value in partial.items():
+                if value and not merged.get(name):
+                    merged[name] = value
 
     _apply_field_inferences(merged, field_names)
     logger.info("서류별 분리 추출 완료 folder=%s result=%s", folder_path, merged)

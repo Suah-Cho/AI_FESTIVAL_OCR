@@ -25,7 +25,14 @@ from app.services.extraction_service import (
     extract_fields_from_documents,
     has_documents,
 )
-from app.services.field_aliases import is_rrn_field, is_valid_rrn_format
+from app.services.field_aliases import (
+    all_location_header_names,
+    is_rrn_field,
+    is_valid_rrn_format,
+    resolve_location_columns,
+    split_doc_path,
+)
+from app.services.field_extraction_service import BATCH_PER_FOLDER, group_document_units
 from app.services.normalization import (
     EXCLUDED,
     MATCH,
@@ -88,6 +95,79 @@ def _find_doc_folder(base_dir: Path, folder_val: str, file_no_val: str) -> Optio
     return None
 
 
+def _list_doc_units(doc_base_dir: Path) -> list[tuple[str, str, str]]:
+    """ZIP 서류 구조에서 (파일폴더값, 파일번호값, 폴더경로) 목록을 만든다."""
+    units = group_document_units(doc_base_dir, BATCH_PER_FOLDER)
+    result: list[tuple[str, str, str]] = []
+    for unit in units:
+        label = unit.label.replace("\\", "/")
+        if "/" in label:
+            folder_val, file_no_val = split_doc_path(label)
+        else:
+            folder_val, file_no_val = "", label
+        result.append((folder_val, file_no_val, unit.folder_path))
+    return result
+
+
+def _format_header_list(raw_headers: dict[int, str]) -> str:
+    ordered = [raw_headers[c] for c in sorted(raw_headers)]
+    return ", ".join(ordered) if ordered else "(헤더 없음)"
+
+
+def _row_expected_values(prepared: PreparedSheet, plan: RowPlan) -> dict[str, str]:
+    """행의 엑셀 기준값(검증 대상 열)을 읽는다."""
+    return {
+        name: _cell_text(prepared.ws.cell(row=plan.row_index, column=col).value)
+        for name, col in plan.expected.items()
+    }
+
+
+def _display_value(value: str) -> str:
+    text = _cell_text(value)
+    return text if text else "(없음)"
+
+
+def _format_field_detail(
+    name: str,
+    status: str,
+    expected: str,
+    extracted: str,
+) -> str:
+    """불일치·확인필요 항목 한 줄 설명."""
+    exp = _display_value(expected)
+    ext = _display_value(extracted)
+    if status == MISMATCH:
+        return f"{name} 불일치 — 기준「{exp}」 서류「{ext}」"
+    if status == NEEDS_CHECK:
+        if not _cell_text(extracted):
+            return f"{name} 확인필요 — 서류에서 못 찾음 (기준「{exp}」)"
+        return f"{name} 확인필요 — 기준「{exp}」 서류「{ext}」"
+    if status == EXCLUDED:
+        return f"{name} 제외"
+    return ""
+
+
+def _build_result_text(
+    statuses: dict[str, str],
+    expected: dict[str, str],
+    extracted: dict[str, str],
+) -> str:
+    """검증결과 열·화면용 요약 문구."""
+    if all(status == MATCH for status in statuses.values()):
+        return "OK"
+    parts = [
+        _format_field_detail(
+            name,
+            status,
+            expected.get(name, ""),
+            extracted.get(name, ""),
+        )
+        for name, status in statuses.items()
+        if status != MATCH
+    ]
+    return " | ".join(p for p in parts if p)
+
+
 @dataclass
 class RowPlan:
     """검증 대상 한 행에 대한 사전 계산 정보."""
@@ -108,6 +188,8 @@ class RowResult:
     statuses: dict[str, str]  # 열이름 -> 판정(MATCH/MISMATCH/...)
     result_text: str
     kind: str = "verified"  # excluded / no_docs / verified / error
+    expected: dict[str, str] = field(default_factory=dict)  # 열이름 -> 엑셀 기준값
+    extracted: dict[str, str] = field(default_factory=dict)  # 열이름 -> 서류 추출값
 
 
 @dataclass
@@ -157,7 +239,13 @@ def prepare_sheet(
     wb = load_workbook(xlsx_path)
     ws = wb.active
 
-    all_candidates = target_columns + [folder_col_name, file_no_col_name]
+    all_candidates = list(
+        dict.fromkeys(
+            target_columns
+            + [folder_col_name, file_no_col_name]
+            + all_location_header_names()
+        )
+    )
     layout = xl.detect_header_row(ws, all_candidates)
     if layout is None:
         raise VerificationError(
@@ -170,22 +258,37 @@ def prepare_sheet(
             "다음 열 이름을 엑셀 헤더에서 찾지 못했습니다: " + ", ".join(missing)
         )
 
-    folder_col = layout.find_column(folder_col_name)
-    file_no_col = layout.find_column(file_no_col_name)
-    if folder_col is None or file_no_col is None:
-        not_found = []
-        if folder_col is None:
-            not_found.append(folder_col_name)
-        if file_no_col is None:
-            not_found.append(file_no_col_name)
-        raise VerificationError("서류 위치 지정 열을 찾지 못했습니다: " + ", ".join(not_found))
+    location = resolve_location_columns(
+        layout.column_index,
+        layout.raw_headers,
+        folder_col_name,
+        file_no_col_name,
+    )
+    auto_units: list[tuple[str, str, str]] | None = None
+    if location.mode == "auto":
+        auto_units = _list_doc_units(doc_base_dir)
+        if not auto_units:
+            raise VerificationError(
+                "엑셀에 서류 위치 열(파일폴더·파일번호·서류경로 등)이 없고, "
+                "ZIP 안에서 서류 폴더도 찾지 못했습니다. "
+                f"엑셀 헤더: {_format_header_list(layout.raw_headers)}"
+            )
 
     result_col = xl.append_result_column(ws, layout, "검증결과")
 
     rows: list[RowPlan] = []
+    auto_idx = 0
     for row_idx in range(layout.header_row + 1, ws.max_row + 1):
-        folder_val = _cell_text(ws.cell(row=row_idx, column=folder_col).value)
-        file_no_val = _cell_text(ws.cell(row=row_idx, column=file_no_col).value)
+        folder_val = ""
+        file_no_val = ""
+        doc_folder: Optional[str] = None
+
+        if location.mode == "two":
+            folder_val = _cell_text(ws.cell(row=row_idx, column=location.folder_col).value)
+            file_no_val = _cell_text(ws.cell(row=row_idx, column=location.file_no_col).value)
+        elif location.mode == "path":
+            path_val = _cell_text(ws.cell(row=row_idx, column=location.path_col).value)
+            folder_val, file_no_val = split_doc_path(path_val)
 
         row_has_data = folder_val or file_no_val or any(
             _cell_text(ws.cell(row=row_idx, column=col).value) for col in resolved.values()
@@ -193,7 +296,23 @@ def prepare_sheet(
         if not row_has_data:
             continue
 
-        if not folder_val or not file_no_val:
+        if location.mode == "auto":
+            if auto_units and auto_idx < len(auto_units):
+                folder_val, file_no_val, doc_folder = auto_units[auto_idx]
+                auto_idx += 1
+            else:
+                rows.append(
+                    RowPlan(
+                        row_index=row_idx,
+                        folder_val=folder_val,
+                        file_no_val=file_no_val,
+                        doc_folder=None,
+                        excluded=True,
+                        expected=dict(resolved),
+                    )
+                )
+                continue
+        elif not folder_val or not file_no_val:
             rows.append(
                 RowPlan(
                     row_index=row_idx,
@@ -205,14 +324,16 @@ def prepare_sheet(
                 )
             )
             continue
+        else:
+            found = _find_doc_folder(doc_base_dir, folder_val, file_no_val)
+            doc_folder = str(found) if found else None
 
-        doc_folder = _find_doc_folder(doc_base_dir, folder_val, file_no_val)
         rows.append(
             RowPlan(
                 row_index=row_idx,
                 folder_val=folder_val,
                 file_no_val=file_no_val,
-                doc_folder=str(doc_folder) if doc_folder else None,
+                doc_folder=doc_folder,
                 excluded=False,
                 expected=dict(resolved),
             )
@@ -242,16 +363,34 @@ def verify_row(prepared: PreparedSheet, plan: RowPlan) -> RowResult:
     예외는 호출자에게 던지지 않고 '확인필요'로 처리해 스트리밍이 끊기지 않게 한다.
     """
     statuses: dict[str, str] = {}
+    expected_values = _row_expected_values(prepared, plan)
+    extracted_values: dict[str, str] = {}
 
     if plan.excluded:
         for name in prepared.target_columns:
             statuses[name] = EXCLUDED
-        return RowResult(plan.row_index, statuses, "제외(폴더/번호 없음)", kind="excluded")
+        result_text = _build_result_text(statuses, expected_values, extracted_values)
+        return RowResult(
+            plan.row_index,
+            statuses,
+            result_text or "제외(폴더/번호 없음)",
+            kind="excluded",
+            expected=expected_values,
+            extracted=extracted_values,
+        )
 
     if plan.doc_folder is None or not has_documents(plan.doc_folder):
         for name in prepared.target_columns:
             statuses[name] = NEEDS_CHECK
-        return RowResult(plan.row_index, statuses, "확인필요(서류 폴더 없음)", kind="no_docs")
+        result_text = _build_result_text(statuses, expected_values, extracted_values)
+        return RowResult(
+            plan.row_index,
+            statuses,
+            result_text or "확인필요(서류 폴더 없음)",
+            kind="no_docs",
+            expected=expected_values,
+            extracted=extracted_values,
+        )
 
     logger.info(
         "행 검증 시작 row=%d folder=%s/%s fields=%s",
@@ -262,19 +401,24 @@ def verify_row(prepared: PreparedSheet, plan: RowPlan) -> RowResult:
     )
 
     try:
-        extracted = extract_fields_from_documents(plan.doc_folder, prepared.target_columns)
+        extracted_raw = extract_fields_from_documents(plan.doc_folder, prepared.target_columns)
     except Exception as exc:  # GPT 실패/타임아웃 등 → 행 단위로 격리
         logger.error("행 검증 추출 오류 row=%d error=%s", plan.row_index, exc)
         for name in prepared.target_columns:
             statuses[name] = NEEDS_CHECK
         return RowResult(
-            plan.row_index, statuses, f"확인필요(추출 오류: {exc})", kind="error"
+            plan.row_index,
+            statuses,
+            f"확인필요(추출 오류: {exc})",
+            kind="error",
+            expected=expected_values,
+            extracted=extracted_values,
         )
 
-    fails: list[str] = []
     for name, col in plan.expected.items():
-        expected = _cell_text(prepared.ws.cell(row=plan.row_index, column=col).value)
-        extracted_val = extracted.get(name, "")
+        expected = expected_values[name]
+        extracted_val = str(extracted_raw.get(name, "") or "")
+        extracted_values[name] = extracted_val
         if is_rrn_field(name) and _cell_text(extracted_val) and not is_valid_rrn_format(
             extracted_val
         ):
@@ -282,20 +426,23 @@ def verify_row(prepared: PreparedSheet, plan: RowPlan) -> RowResult:
         else:
             status = compare_values(expected, extracted_val)
         statuses[name] = status
-        if status != MATCH:
-            fails.append(f"{name}:{status}")
 
-    result_text = "OK" if not fails else ", ".join(fails)
+    result_text = _build_result_text(statuses, expected_values, extracted_values)
     logger.info(
         "행 검증 완료 row=%d result=%s extracted=%s statuses=%s",
         plan.row_index,
         result_text,
-        extracted,
+        extracted_values,
         statuses,
     )
 
     return RowResult(
-        plan.row_index, statuses, result_text, kind="verified"
+        plan.row_index,
+        statuses,
+        result_text,
+        kind="verified",
+        expected=expected_values,
+        extracted=extracted_values,
     )
 
 

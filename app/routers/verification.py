@@ -175,6 +175,8 @@ async def verify_stream(session_id: str):
                         "row_index": result.row_index,
                         "result_text": result.result_text,
                         "statuses": result.statuses,
+                        "expected": result.expected,
+                        "extracted": result.extracted,
                     }
                 )
             session.done = True

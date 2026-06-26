@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.schemas.extraction import get_doc_type_preset
-from app.services.field_aliases import is_rrn_field, normalize_field_name
+from app.services.field_aliases import is_birth_date_field, is_rrn_field, normalize_field_name
 
 DOC_TYPE_BUSINESS = "business_registration"
 DOC_TYPE_ID = "id_card"
@@ -38,6 +38,11 @@ CONTACT_DOC_HINT = (
     "첨부 이미지 중 신청서·계약서·사업자등록증 등에서 연락처를 찾으십시오.\n"
     "- '휴대전화'·'휴대폰': 휴대전화 번호 (010 등). 신분증에는 없을 수 있음.\n"
     "- '전화'·'대표자 전화': 서류에 적힌 해당 번호.\n"
+)
+
+BIRTH_DATE_FIELD_HINT = (
+    "생년월일은 신분증에서 먼저 확인하되, 글자가 흐리거나 판독이 어려우면 "
+    "사업자등록증에 적힌 대표자 생년월일 등을 참고하여 서류에 적힌 값을 그대로 추출하십시오."
 )
 
 
@@ -135,6 +140,10 @@ def build_mixed_doc_hint(field_names: list[str]) -> str:
         lines.append(
             "- 대표자명·상호명·사업자번호는 사업자등록증에 적힌 값만 사용하십시오."
         )
+        if any(is_birth_date_field(n) for n in business):
+            lines.append(
+                "- 생년월일: 사업자등록증에 대표자 생년월일 등으로 명확히 적힌 경우가 있습니다."
+            )
         lines.append("")
 
     id_fields = groups.get(DOC_TYPE_ID, [])
@@ -143,7 +152,10 @@ def build_mixed_doc_hint(field_names: list[str]) -> str:
         lines.append(
             "- 실명번호(주민등록번호)는 YYMMDD-XXXXXXX 형식(하이픈 포함 13자리)."
         )
-        lines.append("- 성별·생년월일·국적은 신분증에 있는 값만 사용하십시오.")
+        if any(is_birth_date_field(n) for n in id_fields):
+            lines.append(f"- {BIRTH_DATE_FIELD_HINT}")
+        else:
+            lines.append("- 성별·생년월일·국적은 신분증에 있는 값만 사용하십시오.")
         lines.append("")
 
     contact = groups.get(DOC_TYPE_CONTACT, [])
