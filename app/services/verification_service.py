@@ -59,7 +59,13 @@ def _find_xlsx(extract_dir: Path) -> Optional[Path]:
 
 
 def _cell_text(value) -> str:
+    """LLM 추출값 등 일반 문자열 변환."""
     return "" if value is None else str(value).strip()
+
+
+def _read_cell(ws, row: int, col: int) -> str:
+    """엑셀 셀 값을 화면·비교용 문자열로 읽는다 (날짜 서식 반영)."""
+    return xl.cell_display_text(ws.cell(row=row, column=col))
 
 
 def _status_to_fill(status: str):
@@ -117,7 +123,7 @@ def _format_header_list(raw_headers: dict[int, str]) -> str:
 def _row_expected_values(prepared: PreparedSheet, plan: RowPlan) -> dict[str, str]:
     """행의 엑셀 기준값(검증 대상 열)을 읽는다."""
     return {
-        name: _cell_text(prepared.ws.cell(row=plan.row_index, column=col).value)
+        name: _read_cell(prepared.ws, plan.row_index, col)
         for name, col in plan.expected.items()
     }
 
@@ -284,14 +290,14 @@ def prepare_sheet(
         doc_folder: Optional[str] = None
 
         if location.mode == "two":
-            folder_val = _cell_text(ws.cell(row=row_idx, column=location.folder_col).value)
-            file_no_val = _cell_text(ws.cell(row=row_idx, column=location.file_no_col).value)
+            folder_val = _read_cell(ws, row_idx, location.folder_col)
+            file_no_val = _read_cell(ws, row_idx, location.file_no_col)
         elif location.mode == "path":
-            path_val = _cell_text(ws.cell(row=row_idx, column=location.path_col).value)
+            path_val = _read_cell(ws, row_idx, location.path_col)
             folder_val, file_no_val = split_doc_path(path_val)
 
         row_has_data = folder_val or file_no_val or any(
-            _cell_text(ws.cell(row=row_idx, column=col).value) for col in resolved.values()
+            _read_cell(ws, row_idx, col) for col in resolved.values()
         )
         if not row_has_data:
             continue
@@ -342,7 +348,7 @@ def prepare_sheet(
     # 화면 표시용 그리드 (헤더에 추가된 검증결과 열까지 포함)
     cells: list[list[str]] = []
     for r in range(1, ws.max_row + 1):
-        row_vals = [_cell_text(ws.cell(row=r, column=c).value) for c in range(1, ws.max_column + 1)]
+        row_vals = [_read_cell(ws, r, c) for c in range(1, ws.max_column + 1)]
         cells.append(row_vals)
 
     return PreparedSheet(

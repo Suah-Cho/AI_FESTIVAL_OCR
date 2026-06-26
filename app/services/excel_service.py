@@ -7,11 +7,15 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import date, datetime, time
+from typing import Any, Optional
 
+from openpyxl.cell.cell import Cell
 from openpyxl.styles import PatternFill
+from openpyxl.utils.datetime import from_excel
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.services.field_aliases import expanded_header_norms, find_column_index
@@ -24,6 +28,58 @@ FILL_EXCLUDED = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type=
 
 # 헤더 탐색 시 살펴볼 최대 행 수
 MAX_HEADER_SCAN_ROWS = 30
+
+
+def _excel_date_separator(number_format: str) -> str:
+    """셀 서식에서 날짜 구분자(., /, -)를 추정한다."""
+    fmt = number_format or ""
+    if "/" in fmt:
+        return "/"
+    if re.search(r"yyyy[\-.]mm", fmt, re.I):
+        return "-" if "-" in fmt else "."
+    if "\\." in fmt or re.search(r"mm\.dd", fmt, re.I):
+        return "."
+    return "-"
+
+
+def _looks_like_date_only_format(number_format: str) -> bool:
+    fmt = (number_format or "").lower()
+    if not fmt or fmt == "general":
+        return False
+    has_date = "y" in fmt and "d" in fmt
+    has_time = "h" in fmt or "ss" in fmt or ":mm" in fmt
+    return has_date and not has_time
+
+
+def format_cell_display(value: Any, number_format: Optional[str] = None) -> str:
+    """openpyxl 셀 값을 화면·비교용 문자열로 변환 (날짜의 00:00:00 제거)."""
+    if value is None:
+        return ""
+
+    fmt = str(number_format or "General")
+
+    if isinstance(value, (int, float)) and _looks_like_date_only_format(fmt):
+        try:
+            value = from_excel(value)
+        except (ValueError, OverflowError, TypeError):
+            pass
+
+    if isinstance(value, datetime):
+        if value.time() == time.min:
+            sep = _excel_date_separator(fmt)
+            return f"{value.year:04d}{sep}{value.month:02d}{sep}{value.day:02d}"
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+
+    if isinstance(value, date):
+        sep = _excel_date_separator(fmt)
+        return f"{value.year:04d}{sep}{value.month:02d}{sep}{value.day:02d}"
+
+    return unicodedata.normalize("NFKC", str(value)).strip()
+
+
+def cell_display_text(cell: Cell) -> str:
+    """워크시트 셀 하나를 화면에 보여줄 문자열로 변환한다."""
+    return format_cell_display(cell.value, cell.number_format)
 
 
 def _norm_header(text: Optional[str]) -> str:
@@ -68,7 +124,7 @@ def detect_header_row(ws: Worksheet, candidate_names: list[str]) -> Optional[Hea
         norm = _norm_header(cell.value)
         if norm and norm not in layout.column_index:
             layout.column_index[norm] = cell.column
-            layout.raw_headers[cell.column] = str(cell.value).strip()
+            layout.raw_headers[cell.column] = cell_display_text(cell)
     return layout
 
 
